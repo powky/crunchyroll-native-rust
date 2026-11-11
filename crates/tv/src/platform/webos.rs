@@ -59,7 +59,7 @@ const HEIGHT: i32 = 1080;
 /// A frame's time at 60 Hz: how long a frame the same as the last one waits for the remote before the next.
 const FRAME: Duration = Duration::from_micros(16_667);
 /// How long a screen at rest waits for the remote (or the worker's news, or a timer) before looking again.
-const AT_REST: Duration = Duration::from_millis(100);
+const AT_REST: Duration = Duration::from_millis(250);
 
 #[derive(Default)]
 struct State {

@@ -187,14 +187,54 @@ pub async fn open(_: &Crunchyroll, _: &str, _: &Wanted) -> Result<Playback> {
     anyhow::bail!("Los videos se reproducen en la TV")
 }
 
+#[cfg(not(target_os = "linux"))]
+pub async fn warm(_: &Crunchyroll, _: &str, _: Option<&str>) {}
+
+/// An episode looked up ahead of being played, in the version `audio` wants: (its id, audio, when, the episode).
+#[cfg(target_os = "linux")]
+type Warmed = (String, Option<String>, std::time::Instant, crunchy_core::crunchyroll_rs::media::Episode);
+
+/// The episode a play button with the focus would start, already looked up (and its version picked): pressing it
+/// goes straight to asking for the stream.
+#[cfg(target_os = "linux")]
+static WARM: std::sync::Mutex<Option<Warmed>> = std::sync::Mutex::new(None);
+/// How long a looked-up episode stays good to start from.
+#[cfg(target_os = "linux")]
+const WARM_FOR: Duration = Duration::from_secs(600);
+
+/// Looks up `content_id` (an episode; anything else is left for [`open`]) in the version `audio` wants, for a play
+/// that may follow.
+#[cfg(target_os = "linux")]
+pub async fn warm(crunchy: &Crunchyroll, content_id: &str, audio: Option<&str>) {
+    use crunchy_core::crunchyroll_rs::media::Episode;
+    let fresh = |held: &Option<Warmed>| {
+        held.as_ref().is_some_and(|(id, held_audio, at, _)| id == content_id && held_audio.as_deref() == audio && at.elapsed() < WARM_FOR)
+    };
+    if fresh(&WARM.lock().unwrap()) {
+        return;
+    }
+    let Ok(episode) = crunchy.media_from_id::<Episode>(content_id).await else { return };
+    let episode = version(crunchy, episode, audio).await;
+    *WARM.lock().unwrap() = Some((content_id.to_string(), audio.map(str::to_string), std::time::Instant::now(), episode));
+}
+
 #[cfg(target_os = "linux")]
 pub async fn open(crunchy: &Crunchyroll, content_id: &str, wanted: &Wanted) -> Result<Playback> {
     use anyhow::Context;
     use crunchy_core::crunchyroll_rs::media::{Episode, Movie};
 
-    let (id, stream) = match crunchy.media_from_id::<Episode>(content_id).await {
+    let started = std::time::Instant::now();
+    let warmed = WARM.lock().unwrap().take().filter(|(id, audio, at, _)| {
+        id == content_id && audio.as_deref() == wanted.audio.as_deref() && at.elapsed() < WARM_FOR
+    });
+    let looked_up = match warmed {
+        Some((.., episode)) => Ok(episode),
+        None => crunchy.media_from_id::<Episode>(content_id).await,
+    };
+    let (id, stream) = match looked_up {
         Ok(episode) => {
             let episode = version(crunchy, episode, wanted.audio.as_deref()).await;
+            eprintln!("player: episode looked up in {:?}", started.elapsed());
             (episode.id.clone(), episode.stream().await)
         }
         Err(_) => {
@@ -203,6 +243,7 @@ pub async fn open(crunchy: &Crunchyroll, content_id: &str, wanted: &Wanted) -> R
         }
     };
     let stream = stream.context("asking for the stream")?;
+    eprintln!("player: stream answered in {:?}", started.elapsed());
     let tracks = Tracks::of(&id, &stream, wanted.subtitles.as_deref());
     let bif = bif_link(&stream.bifs);
     eprintln!("player: seek thumbnails {}", if bif.is_some() { "in the stream" } else { "none" });

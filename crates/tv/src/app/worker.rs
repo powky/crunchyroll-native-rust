@@ -85,6 +85,8 @@ pub enum Command {
     /// a stream's seek thumbnails (a BIF file at `url`), kept under `key`; its frames are then pictures
     /// `bif:{key}:{index}`
     Bif { key: String, url: String },
+    /// an episode a play button would start, looked up ahead in the version `audio` wants
+    Warm { id: String, audio: Option<String> },
     EpisodeRating(String),
     /// "up", "down", or `None` to take the thumb back
     RateEpisode { id: String, rating: Option<String> },
@@ -628,6 +630,7 @@ async fn handle(shared: &Arc<Shared>, command: Command) -> Result<()> {
             };
             let _ = shared.events.send(event);
         }
+        Command::Warm { id, audio } => player::warm(&crunchy(shared).await?, &id, audio.as_deref()).await,
         // the player's own requests go on quietly when they fail: the video plays on without them
         Command::SavePlayhead { id, seconds } => {
             if let Err(error) = ctx(shared).await?.save_playhead(&id, seconds).await {

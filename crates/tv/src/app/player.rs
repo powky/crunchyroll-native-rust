@@ -957,7 +957,7 @@ impl Page for PlayerPage {
         }
         self.previews = env.state.settings.previews;
         let profile = env.state.account.profile();
-        self.wanted.audio = profile.map(|profile| profile.audio_language.clone()).filter(|s| !s.is_empty());
+        self.wanted.audio = env.state.account.audio();
         self.wanted.subtitles = profile.map(|profile| profile.subtitle_language.clone()).filter(|s| !s.is_empty());
         self.wanted.max_height = max_height(&env.state.settings.video_quality);
         if self.card.kind == Kind::Episode {
@@ -995,6 +995,10 @@ impl Page for PlayerPage {
                 let card = card.clone().filter(|card| card.id != self.card.id);
                 if *forward {
                     self.next = Some(card.clone());
+                    // looked up ahead, so it starts sooner when this one ends
+                    if let Some(next) = &card {
+                        self.send(env.worker, Command::Warm { id: next.id.clone(), audio: self.wanted.audio.clone() });
+                    }
                 }
                 if self.adjacent == Some(*forward) {
                     self.adjacent = None;

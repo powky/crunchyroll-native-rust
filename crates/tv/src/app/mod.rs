@@ -75,6 +75,11 @@ impl Account {
     pub fn profile(&self) -> Option<&Profile> {
         self.current.as_ref().and_then(|id| self.profiles.list.iter().find(|p| &p.id == id))
     }
+
+    /// The audio the profile plays in, as the player asks for it (also what episodes are looked up ahead in).
+    pub fn audio(&self) -> Option<String> {
+        self.profile().map(|profile| profile.audio_language.clone()).filter(|audio| !audio.is_empty())
+    }
 }
 
 pub struct State {

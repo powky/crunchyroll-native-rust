@@ -47,6 +47,9 @@ pub struct Feed {
     pending: Option<(Card, Instant)>,
     /// when the hero last changed: a moment later the art around the focus loads
     preload_at: Option<Instant>,
+    /// the audio episodes are looked up ahead in (the page sets it): an episode the hero rests on is, so OK starts
+    /// it sooner
+    pub warm_audio: Option<String>,
     /// where the hero's text starts
     hero_top: f32,
 }
@@ -57,7 +60,17 @@ const CARD_X: f32 = 48.0;
 
 impl Feed {
     pub fn new(rows: Vec<FeedRow>, hero_top: f32) -> Feed {
-        Feed { rows, row: 0, row_pos: 0.0, backdrop: Backdrop::default(), hero: None, pending: None, preload_at: None, hero_top }
+        Feed {
+            rows,
+            row: 0,
+            row_pos: 0.0,
+            backdrop: Backdrop::default(),
+            hero: None,
+            pending: None,
+            preload_at: None,
+            warm_audio: None,
+            hero_top,
+        }
     }
 
     pub fn focused(&self) -> Option<&Card> {
@@ -140,7 +153,10 @@ impl Feed {
         let now = Instant::now();
         if let Some(card) = self.focused().cloned() {
             match &self.pending {
-                _ if self.hero.is_none() => self.hero = Some(card),
+                _ if self.hero.is_none() => {
+                    self.hero = Some(card);
+                    self.preload_at = Some(now);
+                }
                 Some((waiting, _)) if waiting.id == card.id => {}
                 _ if self.hero.as_ref().is_some_and(|h| h.id == card.id) => self.pending = None,
                 _ => self.pending = Some((card, now)),
@@ -157,6 +173,9 @@ impl Feed {
         if self.preload_at.is_some_and(|at| now.duration_since(at) >= PRELOAD_AFTER) {
             self.preload_at = None;
             self.preload_around(ui, heroes);
+            if let Some(card) = self.hero.as_ref().filter(|card| card.kind == Kind::Episode) {
+                ui.worker.send(Command::Warm { id: card.id.clone(), audio: self.warm_audio.clone() });
+            }
         }
 
         let hero = self.hero.clone();

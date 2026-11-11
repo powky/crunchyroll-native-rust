@@ -113,6 +113,8 @@ pub struct ShowPage {
     /// the player closes seen, and whether the page is reloading after one (keeping its place)
     watched: Option<u64>,
     refreshing: bool,
+    /// the episode a press of OK would play, and since when (looked up ahead once it has rested a moment)
+    warm: Option<(String, Instant, bool)>,
 }
 
 const TOP: f32 = 96.0;
@@ -149,6 +151,7 @@ impl ShowPage {
             placed: false,
             watched: None,
             refreshing: false,
+            warm: None,
         }
     }
 
@@ -515,6 +518,22 @@ impl Page for ShowPage {
     }
 
     fn draw(&mut self, ui: &mut Ui, state: &State, focused: bool) {
+        // the episode OK would play (play, or the episode with the focus) is looked up ahead once the focus rests
+        let target = match self.zone {
+            Zone::Actions => self.to_play().filter(|card| card.kind == Kind::Episode).map(|card| card.id),
+            Zone::Episodes => self.episodes().and_then(|list| list.get(self.episode_focus).map(|card| card.id.clone())),
+            _ => None,
+        };
+        match (&mut self.warm, target) {
+            (Some((held, since, sent)), Some(id)) if *held == id => {
+                if !*sent && since.elapsed() >= Duration::from_millis(600) {
+                    *sent = true;
+                    ui.worker.send(Command::Warm { id, audio: state.account.audio() });
+                }
+            }
+            (warm, Some(id)) => *warm = Some((id, Instant::now(), false)),
+            (warm, None) => *warm = None,
+        }
         // back from the player: what's next and how far each episode was watched come again
         match self.watched {
             None => self.watched = Some(state.watched),

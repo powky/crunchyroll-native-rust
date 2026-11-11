@@ -107,6 +107,7 @@ impl Page for HomePage {
         }
         match self.feed.as_mut() {
             Some(feed) => {
+                feed.warm_audio = state.account.audio();
                 for index in feed.wanted() {
                     if let Some(spec) = self.specs.get(index) {
                         ui.worker.send(Command::LoadRow(index, spec.clone()));
