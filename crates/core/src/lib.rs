@@ -8,6 +8,7 @@ pub mod catalog;
 pub mod content;
 pub mod images;
 pub mod model;
+pub mod play;
 pub mod platform;
 pub mod session;
 pub mod store;

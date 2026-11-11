@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
+base64 = "0.22"
 crunchyroll-rs = "0.19.1"
 futures-util = "0.3.34"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "form"] }
