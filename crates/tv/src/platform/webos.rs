@@ -12,7 +12,9 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 use khronos_egl as egl;
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
-use wayland_client::protocol::{wl_compositor, wl_keyboard, wl_registry, wl_seat, wl_shell, wl_shell_surface, wl_surface};
+use wayland_client::protocol::{
+    wl_compositor, wl_keyboard, wl_output, wl_registry, wl_seat, wl_shell, wl_shell_surface, wl_surface,
+};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum};
 
 use super::{App, Key};
@@ -35,6 +37,7 @@ pub mod shell {
 use shell::wl_webos_shell::WlWebosShell;
 use shell::wl_webos_shell_surface::{self, WlWebosShellSurface};
 
+/// The UI's logical size; the surface is the screen's real size (3840x2160 on a 4K TV) and the renderer scales.
 const WIDTH: i32 = 1920;
 const HEIGHT: i32 = 1080;
 const APP_ID: &str = "com.ian.crunchy";
@@ -43,6 +46,8 @@ const APP_ID: &str = "com.ian.crunchy";
 struct State {
     keys: Vec<Key>,
     keyboards: Vec<wl_keyboard::WlKeyboard>,
+    /// the screen's current mode, from wl_output
+    output: Option<(i32, i32)>,
     closed: bool,
 }
 
@@ -65,10 +70,14 @@ pub fn run(mut app: impl App + 'static) -> Result<()> {
     let shell: WlWebosShell = globals.bind(&qh, 1..=1, ()).context("wl_webos_shell")?;
     // the remote may sit on a seat of its own: take every one
     let mut seats = Vec::new();
+    let mut outputs = Vec::new();
     for global in globals.contents().clone_list() {
         eprintln!("crunchy: global {} v{}", global.interface, global.version);
         if global.interface == "wl_seat" {
             seats.push(globals.registry().bind::<wl_seat::WlSeat, _, _>(global.name, global.version.min(5), &qh, ()));
+        }
+        if global.interface == "wl_output" {
+            outputs.push(globals.registry().bind::<wl_output::WlOutput, _, _>(global.name, global.version.min(2), &qh, ()));
         }
     }
 
@@ -108,7 +117,10 @@ pub fn run(mut app: impl App + 'static) -> Result<()> {
     ];
     let config = egl.choose_first_config(display, &attributes)?.context("no EGL config")?;
     let context = egl.create_context(display, config, None, &[egl::CONTEXT_CLIENT_VERSION, 2, egl::NONE])?;
-    let window = wayland_egl::WlEglSurface::new(surface.id(), WIDTH, HEIGHT).context("wl_egl_window")?;
+    // draw at the screen's own resolution so text and pictures are sharp on a 4K panel (CRUNCHY_SIZE=WxH overrides)
+    let (width, height) = surface_size(state.output);
+    eprintln!("crunchy: output {:?}, drawing at {width}x{height}", state.output);
+    let window = wayland_egl::WlEglSurface::new(surface.id(), width, height).context("wl_egl_window")?;
     let egl_surface = unsafe { egl.create_window_surface(display, config, window.ptr() as egl::NativeWindowType, None) }
         .context("EGL window surface")?;
     egl.make_current(display, Some(egl_surface), Some(egl_surface), Some(context))?;
@@ -119,10 +131,14 @@ pub fn run(mut app: impl App + 'static) -> Result<()> {
         })
     };
     let mut renderer = unsafe { Renderer::new(gl, GlFlavor::Es2)? };
-    renderer.resize(WIDTH as u32, HEIGHT as u32);
-    eprintln!("crunchy: EGL up, {WIDTH}x{HEIGHT}");
+    renderer.resize(width as u32, height as u32);
+    eprintln!("crunchy: EGL up, {width}x{height}");
 
     let mut frames: u64 = 0;
+    // frame pacing over the last 600 frames: the average and the slowest
+    let mut window_start = std::time::Instant::now();
+    let mut last_frame = window_start;
+    let mut worst = Duration::ZERO;
     loop {
         pump(&connection, &mut queue, &mut state)?;
         if state.closed {
@@ -144,14 +160,41 @@ pub fn run(mut app: impl App + 'static) -> Result<()> {
             connection.flush()?;
         }
         frames += 1;
-        if frames < 3 || frames % 600 == 0 {
+        let now = std::time::Instant::now();
+        worst = worst.max(now - last_frame);
+        last_frame = now;
+        if frames < 3 {
             eprintln!("crunchy: {frames} frames");
+        } else if frames % 600 == 0 {
+            let average = (now - window_start).as_secs_f32() * 1000.0 / 600.0;
+            eprintln!("crunchy: {frames} frames, {average:.1} ms average, {:.1} ms worst", worst.as_secs_f32() * 1000.0);
+            window_start = now;
+            worst = Duration::ZERO;
         }
     }
     drop(shell_surface);
     drop(window_role);
     drop(seats);
+    drop(outputs);
     Ok(())
+}
+
+/// The surface size: the screen's mode when it's at least the UI's size, else 1920x1080.
+fn surface_size(output: Option<(i32, i32)>) -> (i32, i32) {
+    // for trying sizes on the TV, where SAM passes no environment: a file in /tmp
+    let wanted = std::env::var("CRUNCHY_SIZE").ok().or_else(|| std::fs::read_to_string("/tmp/crunchy-size").ok());
+    if let Some(value) = wanted
+        && let Some((w, h)) = value.trim().split_once('x')
+        && let (Ok(w), Ok(h)) = (w.parse(), h.parse())
+    {
+        return (w, h);
+    }
+    // the graphics plane's own size: on a C1 that's 1080p even though the panel is 4K (the TV's scaler takes it the
+    // rest of the way), so drawing more would only be shrunk back by the compositor
+    match output {
+        Some((w, h)) if w >= WIDTH && h >= HEIGHT && w * HEIGHT == h * WIDTH => (w, h),
+        _ => (WIDTH, HEIGHT),
+    }
 }
 
 /// Handles whatever the compositor sent since the last frame, without waiting.
@@ -232,6 +275,21 @@ impl Dispatch<WlWebosShellSurface, ()> for State {
         match event {
             wl_webos_shell_surface::Event::Close => state.closed = true,
             other => eprintln!("crunchy: shell event {other:?}"),
+        }
+    }
+}
+
+impl Dispatch<wl_output::WlOutput, ()> for State {
+    fn event(state: &mut Self, _: &wl_output::WlOutput, event: wl_output::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        match event {
+            wl_output::Event::Mode { flags: WEnum::Value(flags), width, height, refresh } => {
+                eprintln!("crunchy: output mode {width}x{height} @{refresh} {flags:?}");
+                if flags.contains(wl_output::Mode::Current) {
+                    state.output = Some((width, height));
+                }
+            }
+            wl_output::Event::Scale { factor } => eprintln!("crunchy: output scale {factor}"),
+            _ => {}
         }
     }
 }
