@@ -1,0 +1,14 @@
+{
+  "id": "com.ian.crunchy",
+  "version": "0.1.0",
+  "vendor": "Ian",
+  "type": "native",
+  "main": "crunchy",
+  "title": "Crunchy",
+  "appDescription": "Native Crunchyroll client (unofficial)",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "iconColor": "#0b0b0e",
+  "transparent": true,
+  "requiredMemory": 160
+}
