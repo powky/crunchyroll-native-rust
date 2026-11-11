@@ -285,7 +285,9 @@ impl Ui<'_> {
 
     /// A full-screen backdrop that crossfades when it changes. Until the full picture is in, `preview` (a smaller
     /// one already loaded, like the card's own) stands in for it.
-    pub fn backdrop(&mut self, fade: &mut Backdrop, wanted: Option<String>, preview: Option<String>, alpha: f32) {
+    /// The screen-filling art behind a page, shaded toward the background as `shade` says, cross-fading when it
+    /// changes. The shading is the picture letting the background through, so it costs no layer of its own.
+    pub fn backdrop(&mut self, fade: &mut Backdrop, wanted: Option<String>, preview: Option<String>, shade: &Shade) {
         if let Some(url) = wanted
             && fade.next.as_ref().map(|(next, _)| next) != Some(&url)
         {
@@ -296,21 +298,60 @@ impl Ui<'_> {
             fade.amount = 0.0;
         }
         let screen = Rect::new(0.0, 0.0, 1920.0, 1080.0);
-        if let Some(layer) = fade.current.clone()
-            && let Some(texture) = self.layer(&layer)
-        {
-            self.gfx.image(&texture, screen, 0.0, alpha);
-        }
-        if let Some(layer) = fade.next.clone()
-            && let Some(texture) = self.layer(&layer)
-        {
+        let xs = shade.breaks(shade.across);
+        let ys = shade.breaks(shade.down);
+        let next = fade.next.clone().and_then(|layer| self.layer(&layer));
+        if next.is_some() {
             fade.amount = (fade.amount + self.dt * 2.5).min(1.0);
-            self.gfx.image(&texture, screen, 0.0, fade.amount * alpha);
+        }
+        // the one under is drawn only while the new one fades in over it
+        if !(next.is_some() && fade.amount >= 1.0)
+            && let Some(layer) = fade.current.clone()
+            && let Some(texture) = self.layer(&layer)
+        {
+            self.gfx.image_faded(&texture, screen, 1.0, &xs, &ys, |x, y| shade.keep(x, y));
+        }
+        if let Some(texture) = next {
+            self.gfx.image_faded(&texture, screen, fade.amount, &xs, &ys, |x, y| shade.keep(x, y));
         }
     }
 
     fn layer(&mut self, (url, preview): &(String, Option<String>)) -> Option<crate::gfx::Texture> {
         self.images.get(self.worker, url, BACKDROP_WIDTH).or_else(|| preview.as_ref().and_then(|p| self.images.get(self.worker, p, 640)))
+    }
+}
+
+/// How a backdrop darkens into the background: stops across (left to right) and down (top to bottom), each where
+/// (0..1) and how much of the background covers the picture there. Darkening one way and then the other is the
+/// picture letting through the product of what each leaves.
+pub struct Shade {
+    pub across: &'static [(f32, f32)],
+    pub down: &'static [(f32, f32)],
+}
+
+impl Shade {
+    fn cover(stops: &[(f32, f32)], at: f32) -> f32 {
+        match stops.iter().position(|(stop, _)| *stop > at) {
+            None => stops.last().map_or(0.0, |(_, cover)| *cover),
+            Some(0) => stops[0].1,
+            Some(index) => {
+                let ((x0, a0), (x1, a1)) = (stops[index - 1], stops[index]);
+                a0 + (a1 - a0) * (at - x0) / (x1 - x0).max(f32::EPSILON)
+            }
+        }
+    }
+
+    /// How much of the picture shows at fractions `x`, `y` of the screen.
+    fn keep(&self, x: f32, y: f32) -> f32 {
+        (1.0 - Self::cover(self.across, x)) * (1.0 - Self::cover(self.down, y))
+    }
+
+    /// Where the shading bends, with both ends.
+    fn breaks(&self, stops: &[(f32, f32)]) -> Vec<f32> {
+        let mut out: Vec<f32> = [0.0, 1.0].into_iter().chain(stops.iter().map(|(stop, _)| *stop)).collect();
+        out.sort_by(f32::total_cmp);
+        out.dedup();
+        out
     }
 }
 

@@ -66,6 +66,19 @@ fn set_video_window(id: Option<String>) {
     VIDEO_WINDOW.lock().unwrap().1 = id;
 }
 
+/// The size the app's surface is drawn at (the UI is laid out at 1920x1080 and scaled to it), as the settings say;
+/// the platform picks a change up between frames.
+static SURFACE_SIZE: Mutex<(i32, i32)> = Mutex::new((1920, 1080));
+
+pub fn set_surface_size(width: i32, height: i32) {
+    *SURFACE_SIZE.lock().unwrap() = (width, height);
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn surface_size_wanted() -> (i32, i32) {
+    *SURFACE_SIZE.lock().unwrap()
+}
+
 /// A writable folder for the session, caches and logs: the first of the candidates the app can write to.
 pub fn data_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("CRUNCHY_DATA_DIR") {

@@ -36,6 +36,8 @@ pub struct Settings {
     pub clock_24h: bool,
     /// tabs hidden from the top bar, by key
     pub hidden_tabs: Vec<String>,
+    /// the size the UI is drawn at: 1080p, 1440p or 2160p (the TV shows it at 1080p whatever it is)
+    pub ui_resolution: String,
     /// the profile chosen last, focused first in the picker
     pub last_profile: Option<String>,
 }
@@ -51,6 +53,7 @@ impl Default for Settings {
             lite: false,
             clock_24h: true,
             hidden_tabs: Vec::new(),
+            ui_resolution: "1080p".into(),
             last_profile: None,
         }
     }
@@ -74,6 +77,15 @@ impl Settings {
         }
     }
 
+    /// The surface size for [`Settings::ui_resolution`].
+    pub fn surface_size(&self) -> (i32, i32) {
+        match self.ui_resolution.as_str() {
+            "1440p" => (2560, 1440),
+            "2160p" => (3840, 2160),
+            _ => (1920, 1080),
+        }
+    }
+
     pub fn tab_hidden(&self, tab: Tab) -> bool {
         self.hidden_tabs.iter().any(|key| key == tab.key())
     }
@@ -88,6 +100,7 @@ enum Row {
     FirstRow,
     Interface,
     Clock,
+    Resolution,
     TabShown(Tab),
     ContentLanguage,
     AudioLanguage,
@@ -104,6 +117,7 @@ impl Row {
             Row::FirstRow => "Primera fila",
             Row::Interface => "Interfaz",
             Row::Clock => "Reloj",
+            Row::Resolution => "Resolución de la interfaz",
             Row::TabShown(tab) => tab.label(),
             Row::ContentLanguage => "Títulos y sinopsis",
             Row::AudioLanguage => "Audio preferido",
@@ -120,6 +134,7 @@ impl Row {
             Row::FirstRow => Icon::Rows,
             Row::Interface => Icon::Sparkles,
             Row::Clock => Icon::Clock,
+            Row::Resolution => Icon::Tv,
             Row::TabShown(Tab::Simulcast) => Icon::Tv,
             Row::TabShown(Tab::Music) => Icon::Note,
             Row::TabShown(Tab::MyList) => Icon::Heart,
@@ -138,6 +153,7 @@ fn sections() -> Vec<(&'static str, Vec<Row>)> {
     vec![
         ("REPRODUCCIÓN", vec![Row::Quality, Row::Subtitles, Row::Previews]),
         ("INICIO", vec![Row::FirstRow, Row::Interface, Row::Clock]),
+        ("PANTALLA", vec![Row::Resolution]),
         (
             "BARRA SUPERIOR",
             vec![Tab::Simulcast, Tab::Series, Tab::Movies, Tab::Music, Tab::MyList].into_iter().map(Row::TabShown).collect(),
@@ -165,6 +181,7 @@ fn options(row: Row, state: &State) -> Vec<(String, String)> {
         Row::FirstRow => pairs(&[("suggestions", "Sugerencias"), ("continue", "Seguir viendo")]),
         Row::Interface => pairs(&[("full", "Completo"), ("lite", "Ligero")]),
         Row::Clock => pairs(&[("24", "24 horas"), ("12", "12 horas (a. m. / p. m.)")]),
+        Row::Resolution => pairs(&[("1080p", "1080p (recomendada)"), ("1440p", "1440p"), ("2160p", "4K (2160p)")]),
         Row::TabShown(_) => pairs(&[("show", "Mostrar"), ("hide", "Ocultar")]),
         Row::ContentLanguage => CONTENT_LANGUAGES.iter().map(|code| (code.to_string(), language_name(code))).collect(),
         Row::AudioLanguage => {
@@ -196,6 +213,7 @@ fn value(row: Row, state: &State) -> Option<String> {
         Row::FirstRow => if s.continue_first { "continue" } else { "suggestions" }.into(),
         Row::Interface => if s.lite { "lite" } else { "full" }.into(),
         Row::Clock => if s.clock_24h { "24" } else { "12" }.into(),
+        Row::Resolution => s.ui_resolution.clone(),
         Row::TabShown(tab) => if s.tab_hidden(tab) { "hide" } else { "show" }.into(),
         Row::ContentLanguage => profile?.content_language.clone(),
         Row::AudioLanguage => profile?.audio_language.clone(),
@@ -247,6 +265,7 @@ impl SettingsPage {
             Row::FirstRow => s.continue_first = chosen == "continue",
             Row::Interface => s.lite = chosen == "lite",
             Row::Clock => s.clock_24h = chosen == "24",
+            Row::Resolution => s.ui_resolution = chosen.into(),
             Row::TabShown(tab) => {
                 s.hidden_tabs.retain(|key| key != tab.key());
                 if chosen == "hide" {

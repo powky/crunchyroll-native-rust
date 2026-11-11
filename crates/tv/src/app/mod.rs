@@ -80,6 +80,8 @@ impl Account {
 pub struct State {
     pub settings: Settings,
     pub account: Account,
+    /// how many times the player closed after playing: pages showing progress reload when it moves
+    pub watched: u64,
 }
 
 /// What a page gets to act with.
@@ -109,6 +111,10 @@ pub trait Page {
     fn transparent(&self) -> bool {
         false
     }
+    /// The page played something (when it closes, progress shown elsewhere is out of date).
+    fn played(&self) -> bool {
+        false
+    }
 }
 
 enum Screen {
@@ -136,6 +142,8 @@ pub struct CrunchyApp {
     message: Option<(String, Instant)>,
     last: Instant,
     started: Instant,
+    /// when a profile was chosen, to log how long the home's first row took
+    profile_at: Option<Instant>,
     frame: u64,
 }
 
@@ -144,20 +152,38 @@ impl CrunchyApp {
         let dir = platform::data_dir();
         eprintln!("crunchy: data in {}", dir.display());
         let settings = Settings::load(&dir);
+        let (width, height) = settings.surface_size();
+        platform::set_surface_size(width, height);
         let worker = Worker::start(dir);
-        worker.send(Command::Start);
-        CrunchyApp {
+        // CRUNCHY_DEMO=player (simulator): the player on a made-up episode, nothing signed in; player-last: the
+        // series' last episode
+        let demo_kind = std::env::var("CRUNCHY_DEMO").unwrap_or_default();
+        let demo = cfg!(not(target_os = "linux")) && demo_kind.starts_with("player");
+        if !demo {
+            worker.send(Command::Start);
+        }
+        let app = CrunchyApp {
             worker,
             images: Images::default(),
             screen: Screen::Starting,
-            state: State { settings, account: Account::default() },
+            state: State { settings, account: Account::default(), watched: 0 },
             stack: Vec::new(),
             alert: None,
             message: None,
             last: Instant::now(),
             started: Instant::now(),
+            profile_at: None,
             frame: 0,
-        }
+        };
+        #[cfg(not(target_os = "linux"))]
+        let app = {
+            let mut app = app;
+            if demo {
+                app.apply(Nav::Push(Box::new(player::PlayerPage::demo(demo_kind == "player-last"))));
+            }
+            app
+        };
+        app
     }
 
     fn toast(&mut self, message: impl Into<String>) {
@@ -190,6 +216,9 @@ impl CrunchyApp {
                 }
             }
             Event::Profiles(profiles) => {
+                if matches!(self.screen, Screen::Starting) {
+                    eprintln!("crunchy: profiles {:.2} s after start", self.started.elapsed().as_secs_f32());
+                }
                 self.state.account.profiles = profiles;
                 if matches!(self.screen, Screen::Starting | Screen::SignIn { .. }) {
                     self.screen = Screen::Profiles(profiles::ProfilesScreen::new());
@@ -197,6 +226,7 @@ impl CrunchyApp {
                 self.route(&Event::ProfileSaved);
             }
             Event::ProfileReady(id, premium) => {
+                self.profile_at = Some(Instant::now());
                 self.state.account.current = Some(id);
                 self.state.account.premium = premium;
                 self.open_main();
@@ -218,11 +248,18 @@ impl CrunchyApp {
                 }
             }
             Event::Languages { audio, subtitles } => self.state.account.languages = Some((audio, subtitles)),
-            Event::Image { url, width, height, rgba } => self.images.arrived(url, width, height, rgba),
+            Event::Image { url, width, height, format, pixels } => self.images.arrived(url, width, height, format, pixels),
             Event::ImageFailed(url) => self.images.failed(url),
             Event::Error(message) => self.toast(message),
             Event::Info(message) => self.toast(message),
-            other => self.route(&other),
+            other => {
+                if let Event::Row(0, _) = &other
+                    && let Some(at) = self.profile_at.take()
+                {
+                    eprintln!("crunchy: the home's first row {:.2} s after the profile", at.elapsed().as_secs_f32());
+                }
+                self.route(&other)
+            }
         }
     }
 
@@ -268,7 +305,9 @@ impl CrunchyApp {
         let nav = if let Some(page) = self.stack.last_mut() {
             match page.key(key, &mut env) {
                 Nav::Back | Nav::Bar => {
-                    self.stack.pop();
+                    if self.stack.pop().is_some_and(|page| page.played()) {
+                        env.state.watched += 1;
+                    }
                     Nav::Stay
                 }
                 other => other,
@@ -333,6 +372,8 @@ impl CrunchyApp {
             }
             Nav::SettingsChanged => {
                 self.state.settings.save();
+                let (width, height) = self.state.settings.surface_size();
+                platform::set_surface_size(width, height);
                 if let Screen::Main(main) = &mut self.screen {
                     main.bar.settings_changed(&self.state);
                     let mut env = Env { worker: &self.worker, state: &mut self.state };
@@ -432,8 +473,10 @@ impl platform::App for CrunchyApp {
                 return false;
             }
         }
-        if self.stack.last().is_some_and(|page| page.finished()) {
-            self.stack.pop();
+        if self.stack.last().is_some_and(|page| page.finished())
+            && self.stack.pop().is_some_and(|page| page.played())
+        {
+            self.state.watched += 1;
         }
 
         let video = self.stack.last().is_some_and(|page| page.transparent());

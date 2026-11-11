@@ -56,6 +56,10 @@ use shell::wl_webos_shell_surface::{self, WlWebosShellSurface};
 /// The UI's logical size; the surface is the screen's real size (3840x2160 on a 4K TV) and the renderer scales.
 const WIDTH: i32 = 1920;
 const HEIGHT: i32 = 1080;
+/// A frame's time at 60 Hz: how long a frame the same as the last one waits for the remote before the next.
+const FRAME: Duration = Duration::from_micros(16_667);
+/// How long a screen at rest waits for the remote (or the worker's news, or a timer) before looking again.
+const AT_REST: Duration = Duration::from_millis(100);
 
 #[derive(Default)]
 struct State {
@@ -132,8 +136,9 @@ pub fn run(mut app: impl App + 'static) -> Result<()> {
     ];
     let config = egl.choose_first_config(display, &attributes)?.context("no EGL config")?;
     let context = egl.create_context(display, config, None, &[egl::CONTEXT_CLIENT_VERSION, 2, egl::NONE])?;
-    // draw at the screen's own resolution so text and pictures are sharp on a 4K panel (CRUNCHY_SIZE=WxH overrides)
-    let (width, height) = surface_size(state.output);
+    // the size the settings ask for (CRUNCHY_SIZE=WxH or /tmp/crunchy-size override it)
+    let forced = forced_size();
+    let (mut width, mut height) = forced.unwrap_or_else(super::surface_size_wanted);
     eprintln!("crunchy: output {:?}, drawing at {width}x{height}", state.output);
     let window = wayland_egl::WlEglSurface::new(surface.id(), width, height).context("wl_egl_window")?;
     let egl_surface = unsafe { egl.create_window_surface(display, config, window.ptr() as egl::NativeWindowType, None) }
@@ -147,6 +152,10 @@ pub fn run(mut app: impl App + 'static) -> Result<()> {
     };
     let mut renderer = unsafe { Renderer::new(gl, GlFlavor::Es2)? };
     renderer.resize(width as u32, height as u32);
+    match background_uploads(&egl, display, config, context) {
+        Ok(uploads) => renderer.uploads = Some(uploads),
+        Err(error) => eprintln!("crunchy: pictures upload between frames: {error:#}"),
+    }
     eprintln!("crunchy: EGL up, {width}x{height}");
 
     let mut frames: u64 = 0;
@@ -154,17 +163,32 @@ pub fn run(mut app: impl App + 'static) -> Result<()> {
     let mut window_start = std::time::Instant::now();
     let mut last_frame = window_start;
     let mut worst = Duration::ZERO;
+    // where the time goes: drawing (CPU, and the GL calls that wait on the GPU), the swap (the GPU finishing, the
+    // compositor, the vblank), and how much was drawn
+    let (mut drawing, mut swapping, mut fill, mut draws) = (Duration::ZERO, Duration::ZERO, 0.0f32, 0u32);
+    let mut waiting = Duration::ZERO;
     let mut video: Option<WlWebosExported> = None;
+    // frames the same as the one on screen aren't drawn or presented; without a swap to wait on, the loop waits for
+    // the remote (or a frame's time) instead
+    let mut presented = 0u32;
+    // frames in a row the same as the one on screen: past half a second of them the screen is at rest, and is
+    // looked at less often (a key still wakes it at once)
+    let mut unchanged = 0u32;
     loop {
-        pump(&connection, &mut queue, &mut state)?;
+        let wait = match unchanged {
+            0 => Duration::ZERO,
+            1..=30 => FRAME,
+            _ => AT_REST,
+        };
+        pump(&connection, &mut queue, &mut state, wait)?;
         match (&video, super::video_window_wanted(), &foreign) {
             (None, true, Some(foreign)) => {
                 let exported = foreign.export_element(&surface, foreign::wl_webos_foreign::WebosExportedType::VideoObject as u32, &qh, ());
-                // the whole screen, in the UI's coordinates
+                // the whole screen: the source as the UI's 1920x1080, the destination in the surface's pixels
                 let source = compositor.create_region(&qh, ());
                 source.add(0, 0, WIDTH, HEIGHT);
                 let destination = compositor.create_region(&qh, ());
-                destination.add(0, 0, WIDTH, HEIGHT);
+                destination.add(0, 0, width, height);
                 exported.set_exported_window(&source, &destination);
                 source.destroy();
                 destination.destroy();
@@ -183,15 +207,33 @@ pub fn run(mut app: impl App + 'static) -> Result<()> {
         if state.closed {
             break;
         }
+        // the settings changed the drawing size: the next buffer comes at the new one
+        if forced.is_none() && super::surface_size_wanted() != (width, height) {
+            (width, height) = super::surface_size_wanted();
+            window.resize(width, height, 0, 0);
+            renderer.resize(width as u32, height as u32);
+            eprintln!("crunchy: drawing at {width}x{height}");
+        }
         let keys = std::mem::take(&mut state.keys);
+        let drawing_from = std::time::Instant::now();
         if !app.frame(&mut renderer, &keys) {
             break;
         }
+        let swapping_from = std::time::Instant::now();
+        drawing += swapping_from - drawing_from;
+        fill += renderer.fill;
+        draws += renderer.draw_calls;
+        waiting += renderer.waited;
         if frames < 2 {
             eprintln!("crunchy: frame {frames} drawn, swapping");
         }
-        // blocks until the next vblank: the frame pacing
-        egl.swap_buffers(display, egl_surface)?;
+        unchanged = if renderer.presented || !keys.is_empty() { 0 } else { unchanged.saturating_add(1) };
+        if renderer.presented {
+            // blocks until the next vblank: the frame pacing
+            egl.swap_buffers(display, egl_surface)?;
+            presented += 1;
+        }
+        swapping += swapping_from.elapsed();
         if frames == 0 {
             // the compositor ignores the state of a surface that has no buffer yet: set it again now it has one
             shell_surface.set_state(wl_webos_shell_surface::State::Fullscreen as u32);
@@ -206,9 +248,22 @@ pub fn run(mut app: impl App + 'static) -> Result<()> {
             eprintln!("crunchy: {frames} frames");
         } else if frames % 600 == 0 {
             let average = (now - window_start).as_secs_f32() * 1000.0 / 600.0;
-            eprintln!("crunchy: {frames} frames, {average:.1} ms average, {:.1} ms worst", worst.as_secs_f32() * 1000.0);
+            let per_frame = |time: Duration| time.as_secs_f32() * 1000.0 / 600.0;
+            eprintln!(
+                "crunchy: {frames} frames ({presented} drawn), {average:.1} ms average, {:.1} ms worst; drawing {:.1} ms \
+                 (waiting {:.1}), swap {:.1} ms, {:.2} screens filled, {} draws a frame",
+                worst.as_secs_f32() * 1000.0,
+                per_frame(drawing),
+                per_frame(waiting),
+                per_frame(swapping),
+                fill / 600.0 / (WIDTH * HEIGHT) as f32,
+                draws / 600,
+            );
             window_start = now;
             worst = Duration::ZERO;
+            presented = 0;
+            (drawing, swapping, fill, draws) = (Duration::ZERO, Duration::ZERO, 0.0, 0);
+            waiting = Duration::ZERO;
         }
     }
     drop(shell_surface);
@@ -218,31 +273,53 @@ pub fn run(mut app: impl App + 'static) -> Result<()> {
     Ok(())
 }
 
-/// The surface size: the screen's mode when it's at least the UI's size, else 1920x1080.
-fn surface_size(output: Option<(i32, i32)>) -> (i32, i32) {
-    // for trying sizes on the TV, where SAM passes no environment: a file in /tmp
-    let wanted = std::env::var("CRUNCHY_SIZE").ok().or_else(|| std::fs::read_to_string("/tmp/crunchy-size").ok());
-    if let Some(value) = wanted
-        && let Some((w, h)) = value.trim().split_once('x')
-        && let (Ok(w), Ok(h)) = (w.parse(), h.parse())
-    {
-        return (w, h);
-    }
-    // the graphics plane's own size: on a C1 that's 1080p even though the panel is 4K (the TV's scaler takes it the
-    // rest of the way), so drawing more would only be shrunk back by the compositor
-    match output {
-        Some((w, h)) if w >= WIDTH && h >= HEIGHT && w * HEIGHT == h * WIDTH => (w, h),
-        _ => (WIDTH, HEIGHT),
-    }
+/// A size to try on the TV in place of the settings', where SAM passes no environment: a file in /tmp.
+///
+/// The UI plane is 1920x1080 whatever the surface (`/proc/lg/fbdev/osdinfo`: input and output windows 1920x1080,
+/// with the web app in front too): the compositor scales a bigger surface down to it, and the TV scales that up to
+/// the panel. Drawing bigger costs GPU time and gains nothing on this TV.
+fn forced_size() -> Option<(i32, i32)> {
+    let wanted = std::env::var("CRUNCHY_SIZE").ok().or_else(|| std::fs::read_to_string("/tmp/crunchy-size").ok())?;
+    let (w, h) = wanted.trim().split_once('x')?;
+    Some((w.parse().ok()?, h.parse().ok()?))
 }
 
-/// Handles whatever the compositor sent since the last frame, without waiting.
-fn pump(connection: &Connection, queue: &mut wayland_client::EventQueue<State>, state: &mut State) -> Result<()> {
+/// A thread that uploads pictures through a context sharing textures with the drawing one (current without a
+/// surface: EGL_KHR_surfaceless_context).
+fn background_uploads(
+    egl: &egl::DynamicInstance<egl::EGL1_4>,
+    display: egl::Display,
+    config: egl::Config,
+    context: egl::Context,
+) -> Result<crate::gfx::Uploads> {
+    let extensions = egl.query_string(Some(display), egl::EXTENSIONS)?.to_string_lossy().into_owned();
+    if !extensions.contains("EGL_KHR_surfaceless_context") {
+        anyhow::bail!("no EGL_KHR_surfaceless_context");
+    }
+    let shared = egl.create_context(display, config, Some(context), &[egl::CONTEXT_CLIENT_VERSION, 2, egl::NONE])?;
+    // EGL's handles aren't Send: across as numbers, the same display and context on the other side
+    let (display, shared) = (display.as_ptr() as usize, shared.as_ptr() as usize);
+    crate::gfx::Uploads::start(move || {
+        let egl = unsafe { egl::DynamicInstance::<egl::EGL1_4>::load_required_from_filename("libEGL.so") }
+            .map_err(|e| anyhow!("loading EGL 1.4: {e}"))?;
+        let display = unsafe { egl::Display::from_ptr(display as egl::EGLDisplay) };
+        let shared = unsafe { egl::Context::from_ptr(shared as egl::EGLContext) };
+        egl.make_current(display, None, None, Some(shared))?;
+        Ok(unsafe {
+            glow::Context::from_loader_function(|name| {
+                egl.get_proc_address(name).map(|f| f as *const c_void).unwrap_or(std::ptr::null())
+            })
+        })
+    })
+}
+
+/// Handles whatever the compositor sent, waiting up to `wait` for something to come.
+fn pump(connection: &Connection, queue: &mut wayland_client::EventQueue<State>, state: &mut State, wait: Duration) -> Result<()> {
     queue.dispatch_pending(state)?;
     connection.flush()?;
     if let Some(guard) = queue.prepare_read() {
         let fd = guard.connection_fd().as_raw_fd();
-        if readable(fd, Duration::ZERO) {
+        if readable(fd, wait) {
             guard.read()?;
         }
     }

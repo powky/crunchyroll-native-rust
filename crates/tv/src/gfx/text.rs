@@ -53,6 +53,8 @@ pub struct TextAtlas {
     size: u32,
     glyphs: HashMap<(Font, char, u32), Glyph>,
     icons: HashMap<(Icon, u32), Option<Cell>>,
+    /// paragraphs already wrapped (a frame wraps the same ones as the last, and wrapping measures a line per word)
+    wraps: HashMap<(Font, u32, u32, usize, String), Vec<String>>,
     shelf_x: u32,
     shelf_y: u32,
     shelf_h: u32,
@@ -78,7 +80,7 @@ impl TextAtlas {
             load(include_bytes!("../../../../assets/fonts/Inter-ExtraBold.ttf"))?,
         ];
         let pixels = vec![0u8; (ATLAS_1X * ATLAS_1X * 4) as usize];
-        let texture = unsafe { super::upload(gl, ATLAS_1X, ATLAS_1X, &pixels)? };
+        let texture = unsafe { super::upload(gl, ATLAS_1X, ATLAS_1X, super::PixelFormat::Rgba, Some(&pixels))? };
         Ok(TextAtlas {
             faces,
             texture,
@@ -86,6 +88,7 @@ impl TextAtlas {
             size: ATLAS_1X,
             glyphs: HashMap::new(),
             icons: HashMap::new(),
+            wraps: HashMap::new(),
             shelf_x: 0,
             shelf_y: 0,
             shelf_h: 0,
@@ -104,7 +107,7 @@ impl TextAtlas {
             let size = if scale > 1.5 { ATLAS_1X * 2 } else { ATLAS_1X };
             if size != self.size {
                 self.pixels = vec![0u8; (size * size * 4) as usize];
-                if let Ok(texture) = unsafe { super::upload(gl, size, size, &self.pixels) } {
+                if let Ok(texture) = unsafe { super::upload(gl, size, size, super::PixelFormat::Rgba, Some(&self.pixels)) } {
                     unsafe { gl.delete_texture(self.texture.id) };
                     self.texture = texture;
                     self.size = size;
@@ -119,6 +122,7 @@ impl TextAtlas {
     fn reset(&mut self) {
         self.glyphs.clear();
         self.icons.clear();
+        self.wraps.clear();
         self.pixels.iter_mut().for_each(|p| *p = 0);
         self.shelf_x = 0;
         self.shelf_y = 0;
@@ -247,6 +251,19 @@ impl TextAtlas {
 
     /// Greedy word wrap; the last allowed line keeps the rest (and gets cut with an ellipsis when drawn).
     pub fn wrap(&mut self, font: Font, size: f32, text: &str, max_width: f32, max_lines: usize) -> Vec<String> {
+        let key = (font, self.px(size), max_width.round() as u32, max_lines, text.to_string());
+        if let Some(lines) = self.wraps.get(&key) {
+            return lines.clone();
+        }
+        let lines = self.wrap_now(font, size, text, max_width, max_lines);
+        if self.wraps.len() >= 512 {
+            self.wraps.clear();
+        }
+        self.wraps.insert(key, lines.clone());
+        lines
+    }
+
+    fn wrap_now(&mut self, font: Font, size: f32, text: &str, max_width: f32, max_lines: usize) -> Vec<String> {
         let mut lines: Vec<String> = Vec::new();
         let mut current = String::new();
         let words: Vec<&str> = text.split_whitespace().collect();
@@ -268,6 +285,11 @@ impl TextAtlas {
         }
         lines.truncate(max_lines.max(1));
         lines
+    }
+
+    /// Whether glyphs rasterised since the last upload wait to go to the GPU.
+    pub fn has_pending(&self) -> bool {
+        self.dirty.is_some()
     }
 
     /// Sends the glyphs rasterised since the last call to the GPU.

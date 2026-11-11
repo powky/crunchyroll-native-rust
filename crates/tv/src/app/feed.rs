@@ -11,7 +11,8 @@ use crate::gfx::{Color, Font, Rect};
 use crate::platform::Key;
 
 use super::theme::*;
-use super::ui::{Backdrop, CARD_PICTURE, HeroSize, HeroView, Ui, row_scroll};
+use super::worker::Command;
+use super::ui::{Backdrop, CARD_PICTURE, HeroSize, HeroView, Shade, Ui, row_scroll};
 
 pub struct FeedRow {
     pub title: String,
@@ -44,6 +45,8 @@ pub struct Feed {
     /// what the hero shows, and the focus waiting to settle into it
     hero: Option<Card>,
     pending: Option<(Card, Instant)>,
+    /// when the hero last changed: a moment later the art around the focus loads
+    preload_at: Option<Instant>,
     /// where the hero's text starts
     hero_top: f32,
 }
@@ -54,7 +57,7 @@ const CARD_X: f32 = 48.0;
 
 impl Feed {
     pub fn new(rows: Vec<FeedRow>, hero_top: f32) -> Feed {
-        Feed { rows, row: 0, row_pos: 0.0, backdrop: Backdrop::default(), hero: None, pending: None, hero_top }
+        Feed { rows, row: 0, row_pos: 0.0, backdrop: Backdrop::default(), hero: None, pending: None, preload_at: None, hero_top }
     }
 
     pub fn focused(&self) -> Option<&Card> {
@@ -144,11 +147,16 @@ impl Feed {
             }
         }
         if let Some((card, at)) = &self.pending
-            && now.duration_since(*at) >= Duration::from_millis(250)
+            && now.duration_since(*at) >= HERO_SETTLE
         {
             self.hero = Some(card.clone());
             self.pending = None;
-            self.prefetch_neighbours(ui, heroes);
+            self.preload_at = Some(now);
+        }
+        // the hero's own picture gets the network first; then what's around it
+        if self.preload_at.is_some_and(|at| now.duration_since(at) >= PRELOAD_AFTER) {
+            self.preload_at = None;
+            self.preload_around(ui, heroes);
         }
 
         let hero = self.hero.clone();
@@ -160,8 +168,7 @@ impl Feed {
             None => card.backdrop.clone().or(card.image.clone()),
         });
         let preview = art.and_then(|a| a.preview.clone());
-        ui.backdrop(&mut self.backdrop, wanted, preview, 1.0);
-        shade_home(ui);
+        ui.backdrop(&mut self.backdrop, wanted, preview, &HOME_SHADE);
 
         match &hero {
             Some(card) => {
@@ -226,75 +233,99 @@ impl Feed {
                             ui.images.prefetch(ui.worker, url, CARD_PICTURE);
                         }
                     }
+
                 }
             }
         }
         ui.gfx.clip(None);
-    }
-
-    /// The art of the cards beside the focus, so the hero has it when the focus moves there.
-    fn prefetch_neighbours(&self, ui: &mut Ui, heroes: &HashMap<String, Hero>) {
-        let Some(row) = self.rows.get(self.row) else { return };
-        let Some(cards) = &row.cards else { return };
-        for index in [row.focus + 1, row.focus.wrapping_sub(1)] {
-            let Some(card) = cards.get(index) else { continue };
-            let art = Self::art_id(card).and_then(|id| heroes.get(id));
-            if let Some(url) = art.and_then(|a| a.preview.clone()) {
-                ui.images.prefetch(ui.worker, &url, 640);
-            }
-            if let Some(url) = art.and_then(|a| a.hero.clone()) {
-                ui.images.prefetch(ui.worker, &url, BACKDROP_WIDTH);
-            }
-            if let Some(url) = art.and_then(|a| a.logo.clone()) {
-                ui.images.prefetch(ui.worker, &url, 900);
+        // the cards of the rows above and below, before Up or Down slides them in
+        for row in [self.row.checked_sub(1), Some(self.row + 1)].into_iter().flatten().filter_map(|i| self.rows.get(i)) {
+            let first = (row.scroll / CARD_STEP) as usize;
+            for card in row.cards.iter().flatten().skip(first.saturating_sub(1)).take(7) {
+                if let Some(url) = &card.image {
+                    ui.images.prefetch(ui.worker, url, CARD_PICTURE);
+                }
             }
         }
     }
+
+    /// What the focus can reach in a press or two, nearest first: right and left, the rows below and above (at the
+    /// same place), then one further along the row, below and right, and two to the left.
+    fn around(&self) -> Vec<&Card> {
+        let at = |row: usize, column: isize| -> Option<&Card> {
+            let cards = self.rows.get(row)?.cards.as_ref().filter(|c| !c.is_empty())?;
+            cards.get((column.max(0) as usize).min(cards.len() - 1))
+        };
+        let Some(current) = self.rows.get(self.row) else { return Vec::new() };
+        let column = current.focus as isize;
+        // the column Up or Down lands on: the same place on screen
+        let across = |row: usize| -> isize {
+            let Some(other) = self.rows.get(row) else { return column };
+            let slot = current.focus as f32 - current.scroll / CARD_STEP;
+            ((other.scroll / CARD_STEP).round() + slot.round()).max(0.0) as isize
+        };
+        let (below, above) = (self.row + 1, self.row.checked_sub(1));
+        let len = current.cards.as_ref().map_or(0, |c| c.len()) as isize;
+        let along = |offset: isize| (0..len).contains(&(column + offset)).then(|| at(self.row, column + offset)).flatten();
+        let mut list = vec![
+            along(1),
+            along(-1),
+            at(below, across(below)),
+            above.and_then(|row| at(row, across(row))),
+            along(2),
+            at(below, across(below) + 1),
+            along(-2),
+        ];
+        let mut seen = std::collections::HashSet::new();
+        list.retain(|card| card.is_some_and(|card| seen.insert(card.id.clone())));
+        list.into_iter().flatten().collect()
+    }
+
+    /// The art of what's around the focus (the web app's preload): the nearest few decoded and on the GPU, so the
+    /// hero shows them the moment the focus moves there; the rest only downloaded, a press away from that.
+    fn preload_around(&self, ui: &mut Ui, heroes: &HashMap<String, Hero>) {
+        let mut downloads = Vec::new();
+        for (index, card) in self.around().into_iter().enumerate() {
+            let Some(art) = Self::art_id(card).and_then(|id| heroes.get(id)) else { continue };
+            let backdrop = art.hero.clone().or(art.card.backdrop.clone());
+            if index < DECODED_AROUND {
+                if let Some(url) = &art.preview {
+                    ui.images.prefetch(ui.worker, url, 640);
+                }
+                if let Some(url) = &backdrop {
+                    ui.images.prefetch(ui.worker, url, BACKDROP_WIDTH);
+                }
+                if let Some(url) = &art.logo {
+                    ui.images.prefetch(ui.worker, url, 900);
+                }
+            } else {
+                downloads.extend([backdrop, art.logo.clone()].into_iter().flatten().filter(|url| !ui.images.is_ready(url)));
+            }
+        }
+        ui.worker.send(Command::Download(downloads));
+    }
 }
+
+/// The hero follows the focus once it rests this long, so moving along a row doesn't redraw it on every press.
+const HERO_SETTLE: Duration = Duration::from_millis(250);
+/// The art around the hero loads this long after it changed: the hero's own picture gets the network first.
+const PRELOAD_AFTER: Duration = Duration::from_millis(700);
+/// Of what's around, how many get their art decoded and on the GPU (the rest is only downloaded).
+const DECODED_AROUND: usize = 3;
 
 /// The home backdrop's shading: dark on the left for the text, dark at the bottom for the shelf.
-pub fn shade_home(ui: &mut Ui) {
+pub const HOME_SHADE: Shade = Shade {
     // 90deg: bg 92% at 0, 72% at 32%, 15% at 62%, 0 at 80%
-    let stops = [(0.0, 0.92), (0.32, 0.72), (0.62, 0.15), (0.80, 0.0)];
-    for pair in stops.windows(2) {
-        let (x0, a0) = pair[0];
-        let (x1, a1) = pair[1];
-        ui.gfx.gradient(Rect::new(x0 * 1920.0, 0.0, (x1 - x0) * 1920.0, 1080.0), BG.alpha(a0), BG.alpha(a1), false);
-    }
+    across: &[(0.0, 0.92), (0.32, 0.72), (0.62, 0.15), (0.80, 0.0)],
     // 180deg: 55% at 0, 0 at 18%, 0 at 40%, 86% at 60%, 100% at 76%
-    let stops = [(0.0, 0.55), (0.18, 0.0), (0.40, 0.0), (0.60, 0.86), (0.76, 1.0), (1.0, 1.0)];
-    for pair in stops.windows(2) {
-        let (y0, a0) = pair[0];
-        let (y1, a1) = pair[1];
-        if a0 > 0.0 || a1 > 0.0 {
-            ui.gfx.gradient(Rect::new(0.0, y0 * 1080.0, 1920.0, (y1 - y0) * 1080.0), BG.alpha(a0), BG.alpha(a1), true);
-        }
-    }
-}
+    down: &[(0.0, 0.55), (0.18, 0.0), (0.40, 0.0), (0.60, 0.86), (0.76, 1.0)],
+};
 
-/// The detail backdrop's shading (`dim` for the audio view).
-pub fn shade_detail(ui: &mut Ui, dim: bool) {
-    if dim {
-        let stops = [(0.0, 0.78), (0.45, 0.90), (0.80, 1.0), (1.0, 1.0)];
-        for pair in stops.windows(2) {
-            let (y0, a0) = pair[0];
-            let (y1, a1) = pair[1];
-            ui.gfx.gradient(Rect::new(0.0, y0 * 1080.0, 1920.0, (y1 - y0) * 1080.0), BG.alpha(a0), BG.alpha(a1), true);
-        }
-        return;
-    }
-    let stops = [(0.0, 0.95), (0.34, 0.78), (0.66, 0.20), (0.82, 0.0)];
-    for pair in stops.windows(2) {
-        let (x0, a0) = pair[0];
-        let (x1, a1) = pair[1];
-        ui.gfx.gradient(Rect::new(x0 * 1920.0, 0.0, (x1 - x0) * 1920.0, 1080.0), BG.alpha(a0), BG.alpha(a1), false);
-    }
-    let stops = [(0.0, 0.35), (0.16, 0.0), (0.36, 0.0), (0.56, 0.90), (0.68, 1.0), (1.0, 1.0)];
-    for pair in stops.windows(2) {
-        let (y0, a0) = pair[0];
-        let (y1, a1) = pair[1];
-        if a0 > 0.0 || a1 > 0.0 {
-            ui.gfx.gradient(Rect::new(0.0, y0 * 1080.0, 1920.0, (y1 - y0) * 1080.0), BG.alpha(a0), BG.alpha(a1), true);
-        }
-    }
-}
+/// A show or artist page's backdrop shading.
+pub const DETAIL_SHADE: Shade = Shade {
+    across: &[(0.0, 0.95), (0.34, 0.78), (0.66, 0.20), (0.82, 0.0)],
+    down: &[(0.0, 0.35), (0.16, 0.0), (0.36, 0.0), (0.56, 0.90), (0.68, 1.0)],
+};
+
+/// The detail backdrop dimmed under the audio view.
+pub const DETAIL_DIM_SHADE: Shade = Shade { across: &[], down: &[(0.0, 0.78), (0.45, 0.90), (0.80, 1.0)] };

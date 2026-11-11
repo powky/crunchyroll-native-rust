@@ -4,7 +4,7 @@ members = ["crates/core", "crates/player", "crates/tv"]
 
 [workspace.package]
 edition = "2024"
-version = "0.1.0"
+version = "1.0.0"
 
 [profile.release]
 opt-level = 3
@@ -12,3 +12,7 @@ lto = "thin"
 codegen-units = 4
 panic = "abort"
 strip = true
+
+# crunchyroll-rs with one field more: the stream's seek thumbnails (vendor/crunchyroll-rs/PATCHED.md)
+[patch.crates-io]
+crunchyroll-rs = { path = "vendor/crunchyroll-rs" }

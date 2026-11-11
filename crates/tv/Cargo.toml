@@ -6,8 +6,8 @@ version.workspace = true
 [dependencies]
 anyhow = "1.0.104"
 base64 = "0.22"
-crunchy-core = { version = "0.1.0", path = "../core" }
-crunchy-player = { version = "0.1.0", path = "../player" }
+crunchy-core = { version = "1.0.0", path = "../core" }
+crunchy-player = { version = "1.0.0", path = "../player" }
 fontdue = "0.9.5"
 futures-util = "0.3.34"
 glow = "0.18.0"

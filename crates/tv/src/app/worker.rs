@@ -6,15 +6,16 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use crunchy_core::account::{self, Album, Profiles};
 use crunchy_core::auth::{self, Poll};
 use crunchy_core::catalog::{self, RowSpec};
-use crunchy_core::content::{Browse, Ctx, Hero, MusicRow, Named, Page, Show};
+use crunchy_core::content::{Browse, Ctx, Hero, MusicRow, Named, Page, Show, SkipEvent};
 use crunchy_core::crunchyroll_rs::Locale;
 use crunchy_core::model::{Card, Kind};
 use crunchy_core::platform::Platform;
@@ -23,7 +24,8 @@ use crunchy_core::store::Store;
 use serde_json::Value;
 use tokio::sync::{Mutex, Semaphore, mpsc};
 
-use crate::player::{self, Playback};
+use crate::gfx::PixelFormat;
+use crate::player::{self, Playback, Wanted};
 
 /// Sign-in codes shown one after another (5 minutes each) before the screen asks for OK.
 const CODE_RENEWALS: usize = 6;
@@ -70,8 +72,22 @@ pub enum Command {
     Languages,
     /// a picture, decoded to at most this width; `soon` when it's on screen (else it's for later)
     Image { url: String, width: u32, soon: bool },
-    /// an episode or movie to play: its id, the profile's subtitle language, where to start
-    Play { id: String, subtitles: Option<String>, from: Duration },
+    /// pictures to have on disk, most wanted first, in place of what was asked before (only what's near the focus
+    /// now is worth the network): two at a time; ones already downloading finish
+    Download(Vec<String>),
+    /// an episode or movie to play: its id, and the audio, subtitles, height and start wanted
+    Play { id: String, wanted: Wanted },
+    /// where an episode or movie was left, in seconds
+    SavePlayhead { id: String, seconds: u32 },
+    /// the episode after (or before) this one
+    Adjacent { id: String, forward: bool },
+    SkipEvents(String),
+    /// a stream's seek thumbnails (a BIF file at `url`), kept under `key`; its frames are then pictures
+    /// `bif:{key}:{index}`
+    Bif { key: String, url: String },
+    EpisodeRating(String),
+    /// "up", "down", or `None` to take the thumb back
+    RateEpisode { id: String, rating: Option<String> },
     SignOut,
 }
 
@@ -117,7 +133,7 @@ pub enum Event {
     Languages { audio: Vec<(String, String)>, subtitles: Vec<(String, String)> },
     /// the profile shown changed its content language: the catalog reloads
     ContentLanguage,
-    Image { url: String, width: u32, height: u32, rgba: Vec<u8> },
+    Image { url: String, width: u32, height: u32, format: PixelFormat, pixels: Vec<u8> },
     ImageFailed(String),
     Error(String),
     /// a toast that isn't an error
@@ -126,6 +142,12 @@ pub enum Event {
     Playback(String, Arc<Playback>),
     /// it couldn't be played (its id, why)
     PlaybackFailed(String, String),
+    /// the episode after (or before) the one with this id, if there's one
+    Adjacent { id: String, forward: bool, card: Option<Card> },
+    SkipEvents(String, Vec<SkipEvent>),
+    /// a BIF loaded: its key and when each frame is, in milliseconds
+    Bif { key: String, times: Vec<u32> },
+    EpisodeRating(String, Option<String>),
 }
 
 pub struct Worker {
@@ -144,11 +166,18 @@ struct Shared {
     /// hero facts kept on disk (`heroes.json`), in the content language they're in
     hero_store: Mutex<Option<HeroStore>>,
     http: reqwest::Client,
+    /// pictures: HTTP/2 from the first byte, so a row's pictures asked at once share one connection (over ALPN
+    /// each would make its own TLS handshake first: a row took 1-2 s instead of a third of one)
+    pictures: reqwest::Client,
     events: Sender<Event>,
     /// pictures on screen decoded at once (decoding is CPU work on a 4-core TV; the UI keeps a core)
     decoding: Semaphore,
     /// pictures asked ahead of time get one core of their own, so they never hold up what's on screen
     background: Semaphore,
+    /// the last [`Command::Download`]: an earlier one stops when it sees it changed
+    downloads: AtomicU64,
+    /// the seek thumbnails of the stream playing, and their key
+    bif: std::sync::Mutex<Option<(String, Arc<Bif>)>>,
 }
 
 impl Worker {
@@ -172,9 +201,18 @@ impl Worker {
                         heroes_asked: Mutex::new(HashSet::new()),
                         hero_store: Mutex::new(None),
                         http: reqwest::Client::builder().build().expect("http client"),
+                        pictures: reqwest::Client::builder()
+                            .http2_prior_knowledge()
+                            .http2_keep_alive_interval(std::time::Duration::from_secs(30))
+                            .http2_keep_alive_while_idle(true)
+                            .pool_idle_timeout(std::time::Duration::from_secs(600))
+                            .build()
+                            .expect("picture client"),
                         events,
                         decoding: Semaphore::new(3),
                         background: Semaphore::new(1),
+                        downloads: AtomicU64::new(0),
+                        bif: std::sync::Mutex::new(None),
                     });
                     let images = shared.dir.join("images");
                     tokio::task::spawn_blocking(move || trim_images(&images));
@@ -420,8 +458,18 @@ async fn handle(shared: &Arc<Shared>, command: Command) -> Result<()> {
             let _ = shared.events.send(Event::Home(specs));
         }
         Command::LoadRow(index, spec) => {
-            let crunchy = crunchy(shared).await?;
-            let cards = catalog::load_row(&crunchy, &spec).await?;
+            let started = std::time::Instant::now();
+            let fast = match spec {
+                RowSpec::ContinueWatching => ctx(shared).await?.continue_watching().await.inspect_err(|error| {
+                    eprintln!("crunchy: continue watching from the discover history: {error:#}");
+                }),
+                _ => Err(anyhow::anyhow!("no quick way")),
+            };
+            let cards = match fast {
+                Ok(cards) => cards,
+                Err(_) => catalog::load_row(&crunchy(shared).await?, &spec).await?,
+            };
+            eprintln!("crunchy: row {index} in {:.2} s", started.elapsed().as_secs_f32());
             let _ = shared.events.send(Event::Row(index, cards.clone()));
             send_heroes(shared, &cards).await?;
         }
@@ -540,18 +588,38 @@ async fn handle(shared: &Arc<Shared>, command: Command) -> Result<()> {
                 futures_util::join!(account::languages(&shared.http, false), account::languages(&shared.http, true));
             let _ = shared.events.send(Event::Languages { audio: audio?, subtitles: subtitles? });
         }
+        Command::Download(urls) => {
+            let generation = shared.downloads.fetch_add(1, Ordering::SeqCst) + 1;
+            let queue = Arc::new(std::sync::Mutex::new(VecDeque::from(urls)));
+            let runners: Vec<_> = (0..2)
+                .map(|_| {
+                    let (shared, queue) = (shared.clone(), queue.clone());
+                    tokio::spawn(async move {
+                        while shared.downloads.load(Ordering::SeqCst) == generation {
+                            let Some(url) = queue.lock().unwrap().pop_front() else { break };
+                            if let Err(error) = picture_bytes(&shared, &url).await {
+                                eprintln!("crunchy: download {url}: {error:#}");
+                            }
+                        }
+                    })
+                })
+                .collect();
+            for runner in runners {
+                let _ = runner.await;
+            }
+        }
         Command::Image { url, width, soon } => match picture(shared, &url, width, soon).await {
-            Ok((w, h, rgba)) => {
-                let _ = shared.events.send(Event::Image { url, width: w, height: h, rgba });
+            Ok((w, h, format, pixels)) => {
+                let _ = shared.events.send(Event::Image { url, width: w, height: h, format, pixels });
             }
             Err(error) => {
                 eprintln!("crunchy: picture {url}: {error:#}");
                 let _ = shared.events.send(Event::ImageFailed(url));
             }
         },
-        Command::Play { id, subtitles, from } => {
+        Command::Play { id, wanted } => {
             let crunchy = crunchy(shared).await?;
-            let event = match player::open(&crunchy, &id, subtitles.as_deref(), from).await {
+            let event = match player::open(&crunchy, &id, &wanted).await {
                 Ok(playback) => Event::Playback(id, Arc::new(playback)),
                 Err(error) => {
                     eprintln!("crunchy: playing {id}: {error:#}");
@@ -559,6 +627,53 @@ async fn handle(shared: &Arc<Shared>, command: Command) -> Result<()> {
                 }
             };
             let _ = shared.events.send(event);
+        }
+        // the player's own requests go on quietly when they fail: the video plays on without them
+        Command::SavePlayhead { id, seconds } => {
+            if let Err(error) = ctx(shared).await?.save_playhead(&id, seconds).await {
+                eprintln!("crunchy: saving where {id} was left: {error:#}");
+            }
+        }
+        Command::Adjacent { id, forward } => {
+            let card = ctx(shared).await?.adjacent_episode(&id, forward).await.unwrap_or_else(|error| {
+                eprintln!("crunchy: the episode next to {id}: {error:#}");
+                None
+            });
+            let _ = shared.events.send(Event::Adjacent { id, forward, card });
+        }
+        Command::SkipEvents(id) => {
+            let events = ctx(shared).await?.skip_events(&id).await.unwrap_or_else(|error| {
+                eprintln!("crunchy: skip events of {id}: {error:#}");
+                Vec::new()
+            });
+            let _ = shared.events.send(Event::SkipEvents(id, events));
+        }
+        Command::Bif { key, url } => {
+            let started = std::time::Instant::now();
+            let bytes = match fetch(&shared.pictures, &url).await {
+                Ok(bytes) => bytes,
+                Err(_) => fetch(&shared.http, &url).await?,
+            };
+            let bif = tokio::task::spawn_blocking(move || Bif::parse(bytes)).await??;
+            eprintln!("crunchy: seek thumbnails: {} frames in {:.1} s", bif.frames.len(), started.elapsed().as_secs_f32());
+            let times = bif.frames.iter().map(|frame| frame.0).collect();
+            *shared.bif.lock().unwrap() = Some((key.clone(), Arc::new(bif)));
+            let _ = shared.events.send(Event::Bif { key, times });
+        }
+        Command::EpisodeRating(id) => match ctx(shared).await?.episode_rating(&id).await {
+            Ok(rating) => {
+                let _ = shared.events.send(Event::EpisodeRating(id, rating));
+            }
+            Err(error) => eprintln!("crunchy: the rating of {id}: {error:#}"),
+        },
+        Command::RateEpisode { id, rating } => {
+            let ctx = ctx(shared).await?;
+            if let Err(error) = ctx.rate_episode(&id, rating.as_deref()).await {
+                // the thumb shown goes back to what Crunchyroll has
+                let rating = ctx.episode_rating(&id).await.unwrap_or(None);
+                let _ = shared.events.send(Event::EpisodeRating(id, rating));
+                return Err(error);
+            }
         }
         Command::SignOut => {
             forget_profile(shared).await;
@@ -618,34 +733,14 @@ fn trim_images(dir: &std::path::Path) {
 }
 
 /// A picture from the disk cache or the network, decoded and shrunk to `max_width`.
-async fn picture(shared: &Shared, url: &str, max_width: u32, soon: bool) -> Result<(u32, u32, Vec<u8>)> {
+async fn picture(shared: &Shared, url: &str, max_width: u32, soon: bool) -> Result<(u32, u32, PixelFormat, Vec<u8>)> {
     let started = std::time::Instant::now();
-    let mut hasher = DefaultHasher::new();
-    url.hash(&mut hasher);
-    let path = shared.dir.join("images").join(format!("{:016x}", hasher.finish()));
-    let (bytes, cached) = match tokio::fs::read(&path).await {
-        Ok(bytes) => (bytes, true),
-        Err(_) => {
-            let bytes = shared
-                .http
-                .get(url)
-                .header("Accept", "image/webp,image/*;q=0.8")
-                .send()
-                .await?
-                .error_for_status()?
-                .bytes()
-                .await?
-                .to_vec();
-            let _ = tokio::fs::create_dir_all(path.parent().expect("images dir")).await;
-            let _ = tokio::fs::write(&path, &bytes).await;
-            (bytes, false)
-        }
-    };
+    let (bytes, cached) = picture_bytes(shared, url).await?;
     let fetched = started.elapsed();
     let _permit = if soon { shared.decoding.acquire().await? } else { shared.background.acquire().await? };
     let waited = started.elapsed();
     let url_tail: String = url.chars().rev().take(48).collect::<String>().chars().rev().collect();
-    tokio::task::spawn_blocking(move || -> Result<(u32, u32, Vec<u8>)> {
+    tokio::task::spawn_blocking(move || -> Result<(u32, u32, PixelFormat, Vec<u8>)> {
         let t0 = std::time::Instant::now();
         let mut image = image::load_from_memory(&bytes).context("decoding")?;
         let started = fetched;
@@ -657,7 +752,13 @@ async fn picture(shared: &Shared, url: &str, max_width: u32, soon: bool) -> Resu
             let height = (image.height() as u64 * max_width as u64 / image.width() as u64) as u32;
             image = image.thumbnail_exact(max_width, height.max(1));
         }
-        let rgba = image.to_rgba8();
+        let (width, height) = (image.width(), image.height());
+        // big opaque pictures (backdrops) go to the GPU at 2 bytes a pixel, dithered so their gradients don't band
+        let (format, pixels) = if !image.color().has_alpha() && width * height >= 1280 * 720 {
+            (PixelFormat::Rgb565, rgb565_dithered(&image.into_rgb8()))
+        } else {
+            (PixelFormat::Rgba, image.into_rgba8().into_raw())
+        };
         // only the slow ones are worth a line
         if started + t0.elapsed() > std::time::Duration::from_millis(600) {
             eprintln!(
@@ -667,11 +768,142 @@ async fn picture(shared: &Shared, url: &str, max_width: u32, soon: bool) -> Resu
             fetched,
             waited - fetched,
             decoded,
-            rgba.width(),
+            width,
             t0.elapsed() - decoded,
             );
         }
-        Ok((rgba.width(), rgba.height(), rgba.into_raw()))
+        Ok((width, height, format, pixels))
     })
     .await?
+}
+
+/// A picture's file: from the disk cache (true), or downloaded into it. A seek thumbnail (`bif:{key}:{index}`)
+/// comes out of the stream's BIF, in memory.
+async fn picture_bytes(shared: &Shared, url: &str) -> Result<(Vec<u8>, bool)> {
+    if let Some(frame) = url.strip_prefix("bif:") {
+        let (key, index) = frame.rsplit_once(':').context("a seek thumbnail's link")?;
+        let index: usize = index.parse()?;
+        let bif = shared.bif.lock().unwrap().clone().filter(|(held, _)| held == key).context("no such seek thumbnails")?;
+        return Ok((bif.1.frame(index).context("no such seek thumbnail")?.to_vec(), true));
+    }
+    let mut hasher = DefaultHasher::new();
+    url.hash(&mut hasher);
+    let path = shared.dir.join("images").join(format!("{:016x}", hasher.finish()));
+    if let Ok(bytes) = tokio::fs::read(&path).await {
+        return Ok((bytes, true));
+    }
+    let bytes = match fetch(&shared.pictures, url).await {
+        Ok(bytes) => bytes,
+        // a host that doesn't speak HTTP/2 straight away
+        Err(_) => fetch(&shared.http, url).await?,
+    };
+    let _ = tokio::fs::create_dir_all(path.parent().expect("images dir")).await;
+    // whole or not at all: a file cut short by the app closing would be read back as a broken picture
+    let partial = path.with_extension("part");
+    if tokio::fs::write(&partial, &bytes).await.is_ok() {
+        let _ = tokio::fs::rename(&partial, &path).await;
+    }
+    Ok((bytes, false))
+}
+
+/// A file over HTTP, as a picture would be asked for.
+async fn fetch(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
+    let response = client.get(url).header("Accept", "image/webp,image/*;q=0.8").send().await?;
+    Ok(response.error_for_status()?.bytes().await?.to_vec())
+}
+
+/// Seek thumbnails in Roku's BIF format: a 64-byte header (magic, version, frame count, milliseconds per
+/// timestamp unit), then an index of (timestamp, offset) pairs ending with 0xffffffff, then the JPEGs.
+pub struct Bif {
+    data: Vec<u8>,
+    /// each frame's time in milliseconds, and where its JPEG starts and ends
+    frames: Vec<(u32, usize, usize)>,
+}
+
+impl Bif {
+    fn parse(data: Vec<u8>) -> Result<Bif> {
+        const MAGIC: [u8; 8] = [0x89, b'B', b'I', b'F', 0x0d, 0x0a, 0x1a, 0x0a];
+        anyhow::ensure!(data.len() >= 64 && data[..8] == MAGIC, "not a BIF file");
+        let word = |at: usize| -> Option<u32> { Some(u32::from_le_bytes(data.get(at..at + 4)?.try_into().ok()?)) };
+        let count = word(12).context("BIF header")? as usize;
+        let unit = match word(16).context("BIF header")? {
+            0 => 1000,
+            unit => unit,
+        };
+        let mut frames = Vec::with_capacity(count);
+        for index in 0..count {
+            let at = 64 + index * 8;
+            let (Some(time), Some(start), Some(end)) = (word(at), word(at + 4), word(at + 12)) else { break };
+            let (start, end) = (start as usize, end as usize);
+            if time == u32::MAX || start >= end || end > data.len() {
+                break;
+            }
+            frames.push((time.saturating_mul(unit), start, end));
+        }
+        anyhow::ensure!(!frames.is_empty(), "a BIF file with no frames");
+        Ok(Bif { data, frames })
+    }
+
+    fn frame(&self, index: usize) -> Option<&[u8]> {
+        let (_, start, end) = *self.frames.get(index)?;
+        self.data.get(start..end)
+    }
+}
+
+/// RGB 5-6-5 (native-endian 16-bit words, as GL takes them), with a 4x4 ordered dither: at 4K its pattern is too
+/// fine to see, and it keeps dark gradients from banding.
+fn rgb565_dithered(rgb: &image::RgbImage) -> Vec<u8> {
+    const BAYER: [u32; 16] = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+    let mut out = Vec::with_capacity(rgb.width() as usize * rgb.height() as usize * 2);
+    for (y, row) in rgb.rows().enumerate() {
+        let thresholds = &BAYER[(y & 3) * 4..(y & 3) * 4 + 4];
+        for (x, pixel) in row.enumerate() {
+            let threshold = thresholds[x & 3] * 255 / 16 + 8;
+            let r = ((pixel[0] as u32 * 31 + threshold) / 255).min(31);
+            let g = ((pixel[1] as u32 * 63 + threshold) / 255).min(63);
+            let b = ((pixel[2] as u32 * 31 + threshold) / 255).min(31);
+            out.extend_from_slice(&((r << 11 | g << 5 | b) as u16).to_ne_bytes());
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Bif;
+
+    /// A BIF with `frames` (timestamp, bytes), 10-second units, laid out as Roku's spec has it.
+    fn bif(frames: &[(u32, &[u8])]) -> Vec<u8> {
+        let mut out = vec![0x89, b'B', b'I', b'F', 0x0d, 0x0a, 0x1a, 0x0a];
+        out.extend(0u32.to_le_bytes());
+        out.extend((frames.len() as u32).to_le_bytes());
+        out.extend(10_000u32.to_le_bytes());
+        out.resize(64, 0);
+        let mut offset = 64 + (frames.len() as u32 + 1) * 8;
+        for (time, data) in frames {
+            out.extend(time.to_le_bytes());
+            out.extend(offset.to_le_bytes());
+            offset += data.len() as u32;
+        }
+        out.extend(u32::MAX.to_le_bytes());
+        out.extend(offset.to_le_bytes());
+        for (_, data) in frames {
+            out.extend_from_slice(data);
+        }
+        out
+    }
+
+    #[test]
+    fn frames_come_with_their_times() {
+        let bif = Bif::parse(bif(&[(0, b"first"), (1, b"second!"), (2, b"third")])).unwrap();
+        assert_eq!(bif.frames.iter().map(|frame| frame.0).collect::<Vec<_>>(), [0, 10_000, 20_000]);
+        assert_eq!(bif.frame(1), Some(&b"second!"[..]));
+        assert_eq!(bif.frame(3), None);
+    }
+
+    #[test]
+    fn anything_else_is_refused() {
+        assert!(Bif::parse(b"not a bif file at all, just some bytes that are long enough to be read".to_vec()).is_err());
+        assert!(Bif::parse(bif(&[])).is_err());
+    }
 }

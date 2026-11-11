@@ -5,7 +5,7 @@ use crunchy_core::model::Card;
 use crate::gfx::{Font, Rect};
 use crate::platform::Key;
 
-use super::feed::shade_detail;
+use super::feed::DETAIL_SHADE;
 use super::show::NO_PLAYER;
 use super::theme::*;
 use super::ui::{Backdrop, HeroSize, HeroView, Look, Ui, row_scroll};
@@ -114,8 +114,7 @@ impl Page for ArtistPage {
     fn draw(&mut self, ui: &mut Ui, _state: &State, focused: bool) {
         let art = self.card.backdrop.clone().or(self.card.poster.clone()).or(self.card.image.clone());
         let preview = self.card.image.clone();
-        ui.backdrop(&mut self.backdrop, art, preview, 1.0);
-        shade_detail(ui, false);
+        ui.backdrop(&mut self.backdrop, art, preview, &DETAIL_SHADE);
         let mut card = self.card.clone();
         card.description = card.description.replace('\n', " ");
         let view = HeroView { card: &card, logo: None, logo_known: true, size: HeroSize::Compact, lines: 4, width: 1000.0 };

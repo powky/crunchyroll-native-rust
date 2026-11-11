@@ -1,0 +1,242 @@
+use crate::common::Image;
+use crate::error::{Error, ErrorKind};
+use crate::media::Subtitle;
+use crate::profile::Wallpaper;
+use crate::{Locale, Request, Result};
+use chrono::Duration;
+use serde::de::{DeserializeOwned, Error as SerdeError, IntoDeserializer};
+use serde::{Deserialize, Deserializer};
+use serde_json::{Map, Value};
+use std::collections::HashMap;
+use std::str::FromStr;
+
+#[derive(Request)]
+pub(crate) struct EmptyJsonProxy;
+impl<'de> Deserialize<'de> for EmptyJsonProxy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+
+        if let Some(map) = &value.as_object()
+            && map.is_empty()
+        {
+            return Ok(EmptyJsonProxy);
+        }
+        Err(SerdeError::custom(format!(
+            "result must be empty object / map: '{value}'"
+        )))
+    }
+}
+impl From<EmptyJsonProxy> for () {
+    fn from(_: EmptyJsonProxy) -> Self {}
+}
+
+pub(crate) fn query_to_urlencoded<K: serde::Serialize, V: serde::Serialize>(
+    query: Vec<(K, V)>,
+) -> Result<Vec<(String, String)>> {
+    let mut q = vec![];
+
+    for (k, v) in query.into_iter() {
+        let key = serde_json::to_value(k)?;
+        let value = serde_json::to_value(v)?;
+
+        let key_as_string = match key {
+            Value::Bool(bool) => bool.to_string(),
+            Value::Number(number) => number.to_string(),
+            Value::String(string) => string,
+            Value::Null => continue,
+            _ => {
+                return Err(Error::error_from_kind(
+                    ErrorKind::Internal,
+                    format!("key is not supported to be urlencoded ({key})"),
+                ));
+            }
+        };
+        let value_as_string = match value {
+            Value::Bool(bool) => bool.to_string(),
+            Value::Number(number) => number.to_string(),
+            Value::String(string) => string,
+            Value::Array(arr) => arr
+                .into_iter()
+                .map(|vv| match vv {
+                    Value::Number(number) => Ok(number.to_string()),
+                    Value::String(string) => Ok(string),
+                    _ => Err(Error::error_from_kind(
+                        ErrorKind::Internal,
+                        format!("value is not supported to be urlencoded ({vv})"),
+                    )),
+                })
+                .collect::<Result<Vec<String>>>()?
+                .join(","),
+            Value::Null => continue,
+            _ => {
+                return Err(Error::error_from_kind(
+                    ErrorKind::Internal,
+                    format!("value is not supported to be urlencoded ({value})"),
+                ));
+            }
+        };
+        q.push((key_as_string, value_as_string));
+    }
+
+    Ok(q)
+}
+
+pub(crate) fn deserialize_millis_to_duration<'de, D>(deserializer: D) -> Result<Duration, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Duration::try_milliseconds(i64::deserialize(deserializer)?).unwrap())
+}
+
+pub(crate) fn serialize_duration_to_millis<S>(
+    duration: &Duration,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_i64(duration.num_milliseconds())
+}
+
+pub(crate) fn deserialize_try_from_string<'de, D, T: FromStr>(
+    deserializer: D,
+) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    T::from_str(value.as_str()).map_err(|_| SerdeError::custom("could not convert string to T"))
+}
+
+/// Some responses are empty objects but actually must be array.
+pub(crate) fn deserialize_maybe_object_to_array<'de, D, T>(
+    deserializer: D,
+) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Default + DeserializeOwned,
+{
+    let value: Value = Deserialize::deserialize(deserializer)?;
+
+    if value.is_object() {
+        Ok(vec![])
+    } else {
+        serde_json::from_value(value).map_err(|e| SerdeError::custom(e.to_string()))
+    }
+}
+
+pub(crate) fn deserialize_maybe_null_to_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned + Default,
+{
+    let value: Value = Deserialize::deserialize(deserializer)?;
+
+    if value.is_null() {
+        Ok(T::default())
+    } else {
+        serde_json::from_value(value).map_err(|e| SerdeError::custom(e.to_string()))
+    }
+}
+
+/// Deserializes an empty string to `None`.
+pub(crate) fn deserialize_empty_pre_string_to_none<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: From<String>,
+{
+    let value: String = Deserialize::deserialize(deserializer)?;
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(T::from(value)))
+    }
+}
+
+pub(crate) fn deserialize_thumbnail_image<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<Image>, D::Error> {
+    let as_map = serde_json::Map::deserialize(deserializer)?;
+
+    if let Some(thumbnail) = as_map.get("thumbnail") {
+        Ok(serde_json::from_value::<Vec<Vec<Image>>>(thumbnail.clone())
+            .map_err(|e| SerdeError::custom(e.to_string()))?
+            .into_iter()
+            .flatten()
+            .collect())
+    } else {
+        Ok(vec![])
+    }
+}
+
+pub(crate) fn deserialize_stream_subtitles<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<Subtitle>, D::Error> {
+    let mut as_map = Map::deserialize(deserializer)?;
+
+    // for whatever reason every subtitles map has a 'none' entry. i suppose it should declare that
+    // no subtitle is available, but keep why doesn't they keep the map empty then? and more, the
+    // none entry is also present if other subtitle are available. questionable
+    let _ = as_map.remove("none");
+
+    let mut subtitles = Vec::with_capacity(as_map.len());
+    for v in as_map.into_values() {
+        subtitles.push(serde_json::from_value(v).map_err(|e| SerdeError::custom(e.to_string()))?);
+    }
+    Ok(subtitles)
+}
+
+pub(crate) fn deserialize_stream_hardsubs<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<HashMap<Locale, String>, D::Error> {
+    let mut as_map = Map::deserialize(deserializer)?;
+
+    // same 'none' entry as already said in `deserialize_stream_subtitles`
+    let _ = as_map.remove("none");
+
+    #[derive(Deserialize)]
+    struct HardSub {
+        url: String,
+    }
+
+    Ok(
+        HashMap::<String, HardSub>::deserialize(as_map.into_deserializer())
+            .map_err(|e| SerdeError::custom(e.to_string()))?
+            .into_iter()
+            .map(|(l, hs)| (Locale::from(l), hs.url))
+            .collect(),
+    )
+}
+
+pub(crate) fn deserialize_panel<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned,
+{
+    let mut as_map = Map::deserialize(deserializer)?;
+
+    if let Some(mut episode_metadata) = as_map.remove("episode_metadata") {
+        as_map.append(episode_metadata.as_object_mut().unwrap())
+    }
+
+    serde_json::from_value(
+        serde_json::to_value(as_map).map_err(|e| SerdeError::custom(e.to_string()))?,
+    )
+    .map_err(|e| SerdeError::custom(e.to_string()))
+}
+
+pub(crate) fn deserialize_wallpaper_from_id<'de, D>(deserializer: D) -> Result<Wallpaper, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let id = String::deserialize(deserializer)?;
+    Ok(Wallpaper {
+        id: id.clone(),
+        title: id,
+    })
+}

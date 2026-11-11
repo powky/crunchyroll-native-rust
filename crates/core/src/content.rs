@@ -316,6 +316,87 @@ impl Ctx {
         Ok(())
     }
 
+    /// Episodes in progress, newest first, one per series: the discover history the official apps (and the web app)
+    /// fill "continue watching" from, in one request (the full watch history pages through everything ever watched,
+    /// and took seconds).
+    pub async fn continue_watching(&self) -> Result<Vec<Card>> {
+        let path = format!("/content/v2/discover/{}/history", self.account);
+        let answer = self.get(&path, &[("n", "30".into()), ("ratings", "true".into())]).await?;
+        let mut cards: Vec<Card> = Vec::new();
+        for item in data(&answer) {
+            if item.get("fully_watched").and_then(Value::as_bool).unwrap_or(false) {
+                continue;
+            }
+            let Some(card) = Card::from_json(item.get("panel").unwrap_or(item)) else { continue };
+            if card.series_id.is_some() && cards.iter().any(|seen| seen.series_id == card.series_id) {
+                continue;
+            }
+            let playhead = item.get("playhead").and_then(Value::as_u64).unwrap_or(0) as u32;
+            cards.push(card.with_playhead(playhead, false));
+        }
+        Ok(cards)
+    }
+
+    /// The episode after (or before) this one, with how far it was watched.
+    pub async fn adjacent_episode(&self, id: &str, forward: bool) -> Result<Option<Card>> {
+        let which = if forward { "up_next" } else { "previous_episode" };
+        let answer = self.get(&format!("/content/v2/discover/{which}/{id}"), &[]).await?;
+        Ok(data(&answer).first().and_then(|item| {
+            let card = Card::from_json(item.get("panel").unwrap_or(item))?;
+            let playhead = item.get("playhead").and_then(Value::as_u64).unwrap_or(0) as u32;
+            let watched = item.get("fully_watched").and_then(Value::as_bool).unwrap_or(false);
+            Some(card.with_playhead(playhead, watched))
+        }))
+    }
+
+    /// Where an episode or movie was left, in seconds.
+    pub async fn save_playhead(&self, id: &str, seconds: u32) -> Result<()> {
+        let path = format!("/content/v2/{}/playheads", self.account);
+        api::post(&self.crunchy, &path, &self.q(&[]), json!({ "content_id": id, "playhead": seconds })).await?;
+        Ok(())
+    }
+
+    fn episode_rating_path(&self, id: &str) -> String {
+        format!("/content-reviews/v2/user/{}/rating/episode/{id}", self.account)
+    }
+
+    /// The profile's thumb on an episode: "up", "down", or `None`.
+    pub async fn episode_rating(&self, id: &str) -> Result<Option<String>> {
+        let answer = api::get(&self.crunchy, &self.episode_rating_path(id), &[]).await?;
+        Ok(Some(str(&answer, "rating").to_string()).filter(|rating| rating == "up" || rating == "down"))
+    }
+
+    /// Thumbs an episode up or down, or takes the thumb back with `None`.
+    pub async fn rate_episode(&self, id: &str, rating: Option<&str>) -> Result<()> {
+        let path = self.episode_rating_path(id);
+        match rating {
+            Some(rating) => api::put(&self.crunchy, &path, &[], json!({ "rating": rating })).await?,
+            None => api::delete(&self.crunchy, &path, &[]).await?,
+        };
+        Ok(())
+    }
+
+    /// The recap, intro, credits and preview of an episode, where Crunchyroll marked them (none for most movies).
+    pub async fn skip_events(&self, id: &str) -> Result<Vec<SkipEvent>> {
+        let url = format!("https://static.crunchyroll.com/skip-events/production/{id}.json");
+        let response = self.crunchy.client().get(url).send().await.context("asking for the skip events")?;
+        if !response.status().is_success() {
+            return Ok(Vec::new());
+        }
+        let answer: Value = response.json().await.context("reading the skip events")?;
+        let mut events: Vec<SkipEvent> = ["recap", "intro", "credits", "preview"]
+            .into_iter()
+            .filter_map(|kind| {
+                let event = answer.get(kind)?;
+                let start = event.get("start").and_then(Value::as_f64)? as f32;
+                let end = event.get("end").and_then(Value::as_f64)? as f32;
+                (end > start).then(|| SkipEvent { kind: kind.to_string(), start, end })
+            })
+            .collect();
+        events.sort_by(|a, b| a.start.total_cmp(&b.start));
+        Ok(events)
+    }
+
     pub async fn browse(&self, browse: &Browse, start: usize, count: usize) -> Result<Page> {
         let mut extra = vec![
             ("n", count.to_string()),
@@ -529,6 +610,15 @@ impl Ctx {
     pub async fn raw(&self, path: &str, extra: &[(&'static str, String)]) -> Result<Value> {
         self.get(path, extra).await
     }
+}
+
+/// A stretch of an episode the player offers to skip, in seconds from the start.
+#[derive(Clone, Debug)]
+pub struct SkipEvent {
+    /// recap, intro, credits or preview
+    pub kind: String,
+    pub start: f32,
+    pub end: f32,
 }
 
 /// A card with what the hero shows above it.

@@ -1,6 +1,8 @@
 //! The simulator: a 960x540 window (1920x1080 pixels on a Retina screen) with desktop OpenGL, arrow keys, Enter
 //! and Escape/Backspace for Back. `CRUNCHY_SHOT=<file.png>` saves frame `CRUNCHY_SHOT_FRAME` (default 90) and quits.
+//! `CRUNCHY_KEYS=ok,right,w60,down` presses keys on its own, one every 12 frames from frame 30 (`wN` waits N frames).
 
+use std::collections::VecDeque;
 use std::num::NonZeroU32;
 
 use anyhow::{Context, Result, anyhow};
@@ -34,6 +36,9 @@ struct Simulator<A: App> {
     keys: Vec<Key>,
     frame: u32,
     shot: Option<(String, u32)>,
+    /// keys to press on their own, and the frame the next one goes at
+    script: VecDeque<String>,
+    next_key: u32,
     error: Option<anyhow::Error>,
 }
 
@@ -44,7 +49,11 @@ pub fn run(app: impl App + 'static) -> Result<()> {
         let frame = std::env::var("CRUNCHY_SHOT_FRAME").ok().and_then(|f| f.parse().ok()).unwrap_or(90);
         (path, frame)
     });
-    let mut simulator = Simulator { app, running: None, keys: Vec::new(), frame: 0, shot, error: None };
+    let script = std::env::var("CRUNCHY_KEYS")
+        .map(|keys| keys.split(',').map(|key| key.trim().to_lowercase()).filter(|key| !key.is_empty()).collect())
+        .unwrap_or_default();
+    let mut simulator =
+        Simulator { app, running: None, keys: Vec::new(), frame: 0, shot, script, next_key: 30, error: None };
     event_loop.run_app(&mut simulator)?;
     match simulator.error {
         Some(error) => Err(error),
@@ -77,13 +86,33 @@ impl<A: App> Simulator<A> {
         let context = context.make_current(&surface)?;
         let _ = surface.set_swap_interval(&context, SwapInterval::Wait(NonZeroU32::new(1).unwrap()));
         let gl = unsafe { glow::Context::from_loader_function_cstr(|name| display.get_proc_address(name)) };
-        let renderer = unsafe { Renderer::new(gl, GlFlavor::DesktopCore)? };
+        let mut renderer = unsafe { Renderer::new(gl, GlFlavor::DesktopCore)? };
+        // screenshots read the frame back: there must always be one
+        renderer.always_draw = true;
         Ok(Running { window, surface, context, renderer })
     }
 
     fn redraw(&mut self, event_loop: &ActiveEventLoop) {
         let Some(running) = self.running.as_mut() else { return };
         let size = running.window.inner_size();
+        while self.frame >= self.next_key
+            && let Some(token) = self.script.pop_front()
+        {
+            self.next_key = self.frame + 12;
+            let key = match token.as_str() {
+                "up" => Key::Up,
+                "down" => Key::Down,
+                "left" => Key::Left,
+                "right" => Key::Right,
+                "ok" => Key::Ok,
+                "back" => Key::Back,
+                wait => {
+                    self.next_key = self.frame + wait.trim_start_matches('w').parse::<u32>().unwrap_or(0);
+                    continue;
+                }
+            };
+            self.keys.push(key);
+        }
         let keys = std::mem::take(&mut self.keys);
         running.renderer.resize(size.width, size.height);
         let keep = self.app.frame(&mut running.renderer, &keys);

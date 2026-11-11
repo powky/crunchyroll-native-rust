@@ -14,7 +14,7 @@ use crate::gfx::{Color, Font, Icon, Rect};
 use crate::platform::Key;
 
 use super::controls::{DropNav, Dropdown};
-use super::feed::shade_detail;
+use super::feed::{DETAIL_DIM_SHADE, DETAIL_SHADE};
 use super::languages::language_name;
 use super::theme::*;
 use super::ui::{Backdrop, HeroSize, HeroView, Look, Ui, row_scroll};
@@ -110,6 +110,9 @@ pub struct ShowPage {
     marking: bool,
     /// the focus was placed once the page loaded
     placed: bool,
+    /// the player closes seen, and whether the page is reloading after one (keeping its place)
+    watched: Option<u64>,
+    refreshing: bool,
 }
 
 const TOP: f32 = 96.0;
@@ -144,6 +147,8 @@ impl ShowPage {
             audio_view: None,
             marking: false,
             placed: false,
+            watched: None,
+            refreshing: false,
         }
     }
 
@@ -340,10 +345,16 @@ impl Page for ShowPage {
 
     fn event(&mut self, event: &Event, env: &mut Env) {
         match event {
+            Event::Show(show) if show.card.id == self.id && self.refreshing => {
+                // after the player: the next episode and the stars change, the season and the focus stay
+                self.refreshing = false;
+                self.show = Some(show.clone());
+            }
             Event::Show(show) if show.card.id == self.id => {
                 self.show = Some(show.clone());
-                // an episode we came from opens its season
-                if let Some(season_id) = self.from.as_ref().and_then(|c| c.episode.as_ref()).map(|e| e.season_id.clone())
+                // the season of the episode we came from opens, else the season of the one to watch next
+                let anchor = self.from.as_ref().or(show.up_next.as_ref());
+                if let Some(season_id) = anchor.and_then(|c| c.episode.as_ref()).map(|e| e.season_id.clone())
                     && let Some(index) = show.seasons.iter().position(|s| s.id == season_id)
                 {
                     self.season = index;
@@ -504,6 +515,20 @@ impl Page for ShowPage {
     }
 
     fn draw(&mut self, ui: &mut Ui, state: &State, focused: bool) {
+        // back from the player: what's next and how far each episode was watched come again
+        match self.watched {
+            None => self.watched = Some(state.watched),
+            Some(seen) if seen != state.watched && self.show.is_some() => {
+                self.watched = Some(state.watched);
+                self.refreshing = true;
+                ui.worker.send(Command::Show(self.id.clone()));
+                if let Some(id) = self.list_id() {
+                    self.requested.remove(&id);
+                    self.request_list(ui.worker);
+                }
+            }
+            _ => {}
+        }
         // a season tab the focus rested on opens
         if let Some(at) = self.season_rest
             && at.elapsed() >= Duration::from_millis(500)
@@ -511,26 +536,35 @@ impl Page for ShowPage {
             self.season_rest = None;
             self.select_season(self.season_focus, ui.worker);
         }
-        // the focus starts on play, or on the episode the page was opened from
-        if !self.placed && self.show.is_some() {
-            if let Some(from) = &self.from
-                && let Some(list) = self.episodes()
-            {
-                if let Some(index) = list.iter().position(|c| c.id == from.id) {
-                    self.episode_focus = index;
-                    self.zone = Zone::Episodes;
+        // the focus starts on play, or on the episode the page was opened from; the list opens at that episode, or
+        // at the one to watch next (in place, not sliding there from the first)
+        if !self.placed && let Some(show) = &self.show {
+            let anchor = match &self.from {
+                Some(from) => Some((from.id.clone(), true)),
+                None => show.up_next.as_ref().map(|next| (next.id.clone(), false)),
+            };
+            match anchor {
+                Some((id, take_focus)) => {
+                    if let Some(list) = self.episodes() {
+                        if let Some(index) = list.iter().position(|c| c.id == id) {
+                            self.episode_focus = index;
+                            self.episode_scroll = index.saturating_sub(2) as f32 * EP_STEP;
+                            if take_focus {
+                                self.zone = Zone::Episodes;
+                            }
+                        }
+                        self.placed = true;
+                    }
                 }
-                self.placed = true;
-            } else if self.from.is_none() {
-                self.placed = true;
+                None => self.placed = true,
             }
         }
 
         let art = self.show.as_ref().and_then(|s| s.hero.clone().or(s.card.backdrop.clone()));
         let wanted = art.or_else(|| matches!(self.card.kind, Kind::Series | Kind::MovieListing).then(|| self.card.backdrop.clone()).flatten());
         let preview = self.show.as_ref().and_then(|s| s.preview.clone());
-        ui.backdrop(&mut self.backdrop, wanted, preview, 1.0);
-        shade_detail(ui, self.audio_view.is_some());
+        let shade = if self.audio_view.is_some() { &DETAIL_DIM_SHADE } else { &DETAIL_SHADE };
+        ui.backdrop(&mut self.backdrop, wanted, preview, shade);
 
         if self.failed {
             ui.gfx.text(Font::Bold, 48.0, PAD, 200.0, "No se pudo cargar", TEXT, None);

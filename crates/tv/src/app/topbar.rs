@@ -1,5 +1,9 @@
-//! The top bar: the logo, a centred capsule of tabs (the search tab last, as an icon), the clock and the profile's
+//! The top bar: the logo, a centred track of tabs (the search tab last, as an icon), the clock and the profile's
 //! avatar, whose menu has Ajustes and Salir. Left/Right move along it, OK switches the page.
+//!
+//! Styled after PlxNative's tab bar (the tvOS idiom): the tabs are 60-pixel pills with 28-pixel labels set in a
+//! recessed near-black track, the current one on a light plate, the focused one solid white; the avatar sits in a
+//! ring of the same material that unfurls into the profile's name when it has the focus.
 
 use crate::gfx::{Color, Font, Icon, Rect};
 use crate::platform::Key;
@@ -79,20 +83,30 @@ pub struct TopBar {
     focus: usize,
     /// the avatar's menu, open, with its focus
     menu: Option<usize>,
+    /// how far the avatar's ring has unfurled into the profile's name, in pixels
+    unfurl: f32,
 }
 
-const BAR_Y: f32 = 40.0;
-const BAR_H: f32 = 64.0;
-const CAPSULE_H: f32 = 60.0;
-const TAB_H: f32 = 48.0;
-const TAB_PAD: f32 = 22.0;
-const TAB_GAP: f32 = 6.0;
-const TAB_FONT: f32 = 22.0;
-const AVATAR_D: f32 = 52.0;
+/// The band the controls sit on: the track's top and height (the pills plus the track's inset all round).
+const BAND_Y: f32 = 40.0;
+const TRACK_PAD: f32 = 8.0;
+const PILL_H: f32 = 60.0;
+const BAND_H: f32 = PILL_H + 2.0 * TRACK_PAD;
+const PILL_PAD: f32 = 18.0;
+const PILL_GAP: f32 = 16.0;
+const TAB_FONT: f32 = 28.0;
+const AVATAR_D: f32 = PILL_H;
+/// The track's material: near-black, deeper at the bottom, held by a faint light rim.
+const TRACK_TOP: Color = Color(0.07, 0.07, 0.08, 0.62);
+const TRACK_BOTTOM: Color = Color(0.02, 0.02, 0.03, 0.76);
+const TRACK_RIM: Color = Color(1.0, 1.0, 1.0, 0.12);
+/// A tab at rest, and the current tab's plate.
+const IDLE_INK: Color = Color(0.96, 0.96, 0.97, 0.74);
+const CURRENT_PLATE: Color = Color(1.0, 1.0, 1.0, 0.20);
 
 impl TopBar {
     pub fn new(state: &State) -> TopBar {
-        let mut bar = TopBar { tab: Tab::Home, items: Vec::new(), focus: 0, menu: None };
+        let mut bar = TopBar { tab: Tab::Home, items: Vec::new(), focus: 0, menu: None, unfurl: 0.0 };
         bar.settings_changed(state);
         bar
     }
@@ -172,68 +186,75 @@ impl TopBar {
     }
 
     pub fn draw(&mut self, ui: &mut Ui, state: &State, focused: bool) {
-        ui.gfx.icon(Icon::Logo, 48.0, BAR_Y + (BAR_H - 38.0) / 2.0, 38.0, ACCENT);
+        let mid = BAND_Y + BAND_H / 2.0;
+        ui.gfx.icon(Icon::Logo, PAD, mid - 19.0, 38.0, ACCENT);
 
-        // the capsule's width first, to centre it
+        // the pills' widths first, to centre the track (labels measured in the heavier weight, so a tab turning
+        // current doesn't move the others)
         let widths: Vec<f32> = self
             .items
             .iter()
-            .map(|item| match item {
-                Item::Tab(Tab::Search) => TAB_H + TAB_GAP,
-                Item::Tab(tab) => ui.gfx.measure(Font::SemiBold, TAB_FONT, tab.label()) + 2.0 * TAB_PAD + TAB_GAP,
-                Item::Avatar => 0.0,
+            .filter_map(|item| match item {
+                Item::Tab(Tab::Search) => Some(PILL_H),
+                Item::Tab(tab) => Some(ui.gfx.measure(Font::SemiBold, TAB_FONT, tab.label()) + 2.0 * PILL_PAD),
+                Item::Avatar => None,
             })
             .collect();
-        let inner: f32 = widths.iter().sum();
-        let capsule = Rect::new(960.0 - (inner + 6.0) / 2.0, BAR_Y + (BAR_H - CAPSULE_H) / 2.0, inner + 6.0, CAPSULE_H);
-        ui.gfx.rect(capsule, CAPSULE_H / 2.0, Color(0.141, 0.141, 0.165, 0.62));
-        let mut x = capsule.x + 6.0;
-        for (index, item) in self.items.iter().enumerate() {
-            let has_focus = focused && index == self.focus && self.menu.is_none();
-            if let Item::Tab(tab) = item {
-                let look = Look::new(has_focus, *tab == self.tab);
-                let y = capsule.y + 6.0;
-                if *tab == Tab::Search {
-                    let (fill, ink) = tab_colors(look);
-                    if let Some(fill) = fill {
-                        ui.gfx.rect(Rect::new(x, y, TAB_H, TAB_H), TAB_H / 2.0, fill);
-                    }
-                    ui.gfx.icon_centered(Icon::Search, x + TAB_H / 2.0, y + TAB_H / 2.0, 22.0, ink);
-                } else {
-                    let w = widths[index] - TAB_GAP;
-                    let (fill, ink) = tab_colors(look);
-                    if let Some(fill) = fill {
-                        ui.gfx.rect(Rect::new(x, y, w, TAB_H), TAB_H / 2.0, fill);
-                    }
-                    ui.gfx.text(Font::SemiBold, TAB_FONT, x + TAB_PAD, y + 10.0, tab.label(), ink, None);
-                }
+        let inner = widths.iter().sum::<f32>() + PILL_GAP * (widths.len().saturating_sub(1)) as f32;
+        let track = Rect::new((1920.0 - inner) / 2.0 - TRACK_PAD, BAND_Y, inner + 2.0 * TRACK_PAD, BAND_H);
+        material(ui, track, false);
+        let mut x = track.x + TRACK_PAD;
+        for (index, (item, w)) in self.items.iter().zip(&widths).enumerate() {
+            let Item::Tab(tab) = item else { continue };
+            let look = Look::new(focused && index == self.focus && self.menu.is_none(), *tab == self.tab);
+            let pill = Rect::new(x, BAND_Y + TRACK_PAD, *w, PILL_H);
+            let (fill, ink) = tab_colors(look);
+            if let Some(fill) = fill {
+                ui.gfx.rect(pill, PILL_H / 2.0, fill);
             }
-            x += widths[index];
+            if *tab == Tab::Search {
+                ui.gfx.icon_centered(Icon::Search, pill.x + PILL_H / 2.0, mid, 30.0, ink);
+            } else {
+                let font = if look.focused || look.selected { Font::SemiBold } else { Font::Regular };
+                let label_w = ui.gfx.measure(font, TAB_FONT, tab.label());
+                ui.gfx.text(font, TAB_FONT, pill.x + (w - label_w) / 2.0, pill.y + 13.0, tab.label(), ink, None);
+            }
+            x += w + PILL_GAP;
         }
 
-        // clock and avatar on the right
-        let mut avatar = Rect::new(1872.0 - AVATAR_D, BAR_Y + (BAR_H - AVATAR_D) / 2.0, AVATAR_D, AVATAR_D);
-        let avatar_focus = focused && self.items[self.focus] == Item::Avatar;
-        let clock_right = avatar.x - 22.0;
-        if avatar_focus {
-            avatar = avatar.scaled(1.15);
-            ui.gfx.rect(avatar.inset(-3.0), AVATAR_D, TEXT);
+        // the avatar in its ring, unfurling leftward into the profile's name while it has the focus (or its menu
+        // is open), and the clock to the left of that
+        let avatar_focus = focused && self.items[self.focus] == Item::Avatar && self.menu.is_none();
+        let name = state.account.profile().map(|p| p.name.clone()).unwrap_or_default();
+        let name_w = ui.gfx.measure(Font::SemiBold, 26.0, &name).min(280.0);
+        let open = if (avatar_focus || self.menu.is_some()) && !name.is_empty() { name_w + 16.0 + 22.0 } else { 0.0 };
+        self.unfurl = approach(self.unfurl, open, ui.dt, 16.0);
+        let avatar = Rect::new(1872.0 - TRACK_PAD - AVATAR_D, BAND_Y + TRACK_PAD, AVATAR_D, AVATAR_D);
+        let chip = Rect::new(avatar.x - TRACK_PAD - self.unfurl, BAND_Y, AVATAR_D + 2.0 * TRACK_PAD + self.unfurl, BAND_H);
+        material(ui, chip, avatar_focus);
+        if self.unfurl > 1.0 && name_w + 38.0 > 0.0 {
+            let shown = ((self.unfurl / (name_w + 38.0) - 0.4) / 0.6).clamp(0.0, 1.0);
+            ui.gfx.clip(Some(chip));
+            let ink = TEXT.alpha(shown);
+            ui.gfx.text(Font::SemiBold, 26.0, avatar.x - 16.0 - name_w, mid - 15.0, &name, ink, Some(280.0));
+            ui.gfx.clip(None);
         }
         let url = state.account.profile().and_then(|p| p.avatar_url());
-        ui.picture(url.as_deref(), avatar, avatar.w / 2.0, 1.0, AVATAR_PICTURE / 2);
+        ui.picture(url.as_deref(), avatar, AVATAR_D / 2.0, 1.0, AVATAR_PICTURE / 2);
+        let clock_right = chip.x - 22.0;
         let (clock, suffix) = clock_text(state.settings.clock_24h);
         let suffix_w = if suffix.is_empty() { 0.0 } else { ui.gfx.measure(Font::SemiBold, 20.0, suffix) + 6.0 };
         let w = ui.gfx.measure(Font::Regular, 28.0, &clock);
         let x = clock_right - suffix_w - w;
-        ui.gfx.text(Font::Regular, 28.0, x, BAR_Y + 15.0, &clock, TEXT, None);
+        ui.gfx.text(Font::Regular, 28.0, x, mid - 17.0, &clock, TEXT, None);
         if !suffix.is_empty() {
-            ui.gfx.text(Font::SemiBold, 20.0, x + w + 6.0, BAR_Y + 22.0, suffix, TEXT, None);
+            ui.gfx.text(Font::SemiBold, 20.0, x + w + 6.0, mid - 10.0, suffix, TEXT, None);
         }
 
         if let Some(menu_focus) = self.menu {
-            let panel = Rect::new(1872.0 - 324.0, BAR_Y + BAR_H + 12.0, 324.0, 24.0 + 8.0 + MENU.len() as f32 * 68.0 - 4.0);
-            ui.gfx.rect(panel.inset(-1.0), 25.0, Color(1.0, 1.0, 1.0, 0.10));
-            ui.gfx.rect(panel, 24.0, Color(0.141, 0.141, 0.165, 0.97));
+            let panel = Rect::new(1872.0 - 324.0, BAND_Y + BAND_H + 12.0, 324.0, 24.0 + 8.0 + MENU.len() as f32 * 68.0 - 4.0);
+            ui.gfx.rect(panel, 24.0, Color(0.10, 0.10, 0.12, 0.97));
+            ui.gfx.ring(panel, 24.0, 1.5, TRACK_RIM);
             for (index, (icon, label, _)) in MENU.iter().enumerate() {
                 let r = Rect::new(panel.x + 16.0, panel.y + 16.0 + index as f32 * 68.0, panel.w - 32.0, 64.0);
                 let look = index == menu_focus;
@@ -249,13 +270,23 @@ impl TopBar {
     }
 }
 
+/// The bar's material: the recessed track (and the avatar's ring); its rim turns white with the focus.
+fn material(ui: &mut Ui, r: Rect, focused: bool) {
+    ui.gfx.gradient_rounded(r, r.h / 2.0, TRACK_TOP, TRACK_BOTTOM, true);
+    if focused {
+        ui.gfx.ring(r, r.h / 2.0, 2.5, TEXT);
+    } else {
+        ui.gfx.ring(r, r.h / 2.0, 1.5, TRACK_RIM);
+    }
+}
+
 fn tab_colors(look: Look) -> (Option<Color>, Color) {
     if look.focused {
         (Some(TEXT), BG)
     } else if look.selected {
-        (Some(VEIL_STRONG), TEXT)
+        (Some(CURRENT_PLATE), TEXT)
     } else {
-        (None, MUTED)
+        (None, IDLE_INK)
     }
 }
 

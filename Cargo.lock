@@ -485,7 +485,7 @@ checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
 name = "crunchy-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -500,7 +500,7 @@ dependencies = [
 
 [[package]]
 name = "crunchy-player"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -513,7 +513,7 @@ dependencies = [
 
 [[package]]
 name = "crunchy-tv"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -543,8 +543,6 @@ dependencies = [
 [[package]]
 name = "crunchyroll-rs"
 version = "0.19.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0b6616fe24346758ca743642a95a6fb9dae836c93cf19e81d8c3c94d736422f"
 dependencies = [
  "byteorder",
  "chrono",

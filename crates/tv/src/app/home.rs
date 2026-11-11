@@ -22,6 +22,8 @@ pub struct HomePage {
     continue_first: bool,
     /// the focus comes down from the bar once the first row arrives
     grab: bool,
+    /// the player closes seen: "continue watching" reloads when another one closes
+    watched: u64,
 }
 
 impl HomePage {
@@ -33,6 +35,7 @@ impl HomePage {
             requested: false,
             continue_first: false,
             grab: true,
+            watched: 0,
         }
     }
 }
@@ -92,7 +95,16 @@ impl Page for HomePage {
         }
     }
 
-    fn draw(&mut self, ui: &mut Ui, _state: &State, focused: bool) {
+    fn draw(&mut self, ui: &mut Ui, state: &State, focused: bool) {
+        // something was watched: the rows with progress in them come again
+        if state.watched != self.watched {
+            self.watched = state.watched;
+            for (index, spec) in self.specs.iter().enumerate() {
+                if matches!(spec, RowSpec::ContinueWatching) && self.feed.as_ref().is_some_and(|f| f.rows.get(index).is_some_and(|r| r.requested)) {
+                    ui.worker.send(Command::LoadRow(index, spec.clone()));
+                }
+            }
+        }
         match self.feed.as_mut() {
             Some(feed) => {
                 for index in feed.wanted() {
