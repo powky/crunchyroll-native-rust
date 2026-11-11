@@ -274,6 +274,8 @@ impl Renderer {
 
     /// A quad with a colour per corner (top-left, top-right, bottom-left, bottom-right): gradients.
     fn quad_colors(&mut self, r: Rect, uv: [f32; 4], colors: [Color; 4], radius: f32, mode: f32) {
+        // past half the short side the distance field has no inside: a circle is the most it can be
+        let radius = radius.min(r.w.min(r.h) / 2.0);
         let (u0, v0, u1, v1) = (uv[0], uv[1], uv[2], uv[3]);
         let corners = [
             (r.x, r.y, u0, v0, 0.0, 0.0),
