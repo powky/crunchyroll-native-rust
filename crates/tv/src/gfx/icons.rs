@@ -363,7 +363,8 @@ fn arc_to(pb: &mut PathBuilder, from: (f32, f32), to: (f32, f32), radii: (f32, f
     } else if sweep && delta < 0.0 {
         delta += TAU;
     }
-    let segments = (delta.abs() / FRAC_PI_2).ceil().max(1.0) as usize;
+    // (a hair under a quarter turn's multiple counts as it: a half circle is two segments, not three)
+    let segments = (delta.abs() / FRAC_PI_2 - 1e-4).ceil().max(1.0) as usize;
     let step = delta / segments as f32;
     let k = 4.0 / 3.0 * (step / 4.0).tan();
     let point = |t: f32| {
@@ -384,5 +385,23 @@ fn arc_to(pb: &mut PathBuilder, from: (f32, f32), to: (f32, f32), radii: (f32, f
         }
         pb.cubic_to(p1x + k * d1x, p1y + k * d1y, p2x - k * d2x, p2y - k * d2y, p2x, p2y);
         t = next;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_path;
+
+    #[test]
+    fn arcs_make_the_shapes_they_describe() {
+        // a circle of radius 10 around (12, 12), as two half-turn arcs (Material's way)
+        let circle = parse_path("M2 12a10 10 0 1 0 20 0 10 10 0 1 0-20 0z").unwrap();
+        let b = circle.compute_tight_bounds().unwrap();
+        for (got, want) in [(b.left(), 2.0), (b.top(), 2.0), (b.right(), 22.0), (b.bottom(), 22.0)] {
+            assert!((got - want).abs() < 0.05, "{got} != {want}");
+        }
+        // flags written with nothing between them and what follows, as svgo does
+        let compact = parse_path("M8 6.82v10.36c0 .79.87 1.27 1.54.84l8.14-5.18a1 1 0 000-1.69L9.54 5.98A.998.998 0 008 6.82z");
+        assert!(compact.and_then(|path| path.compute_tight_bounds()).is_some_and(|b| (b.right() - 18.14).abs() < 0.2));
     }
 }
