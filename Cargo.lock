@@ -488,6 +488,7 @@ name = "crunchy-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "crunchyroll-rs",
  "futures-util",
  "reqwest",
@@ -498,11 +499,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "crunchy-player"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "crunchy-core",
+ "libc",
+ "reqwest",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "crunchy-tv"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
+ "bitflags 2.13.2",
  "crunchy-core",
+ "crunchy-player",
  "fontdue",
  "futures-util",
  "glow",

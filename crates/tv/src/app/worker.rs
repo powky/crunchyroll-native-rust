@@ -8,6 +8,7 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use crunchy_core::account::{self, Album, Profiles};
@@ -21,6 +22,8 @@ use crunchy_core::session::Session;
 use crunchy_core::store::Store;
 use serde_json::Value;
 use tokio::sync::{Mutex, Semaphore, mpsc};
+
+use crate::player::{self, Playback};
 
 /// Sign-in codes shown one after another (5 minutes each) before the screen asks for OK.
 const CODE_RENEWALS: usize = 6;
@@ -67,6 +70,8 @@ pub enum Command {
     Languages,
     /// a picture, decoded to at most this width; `soon` when it's on screen (else it's for later)
     Image { url: String, width: u32, soon: bool },
+    /// an episode or movie to play: its id, the profile's subtitle language, where to start
+    Play { id: String, subtitles: Option<String>, from: Duration },
     SignOut,
 }
 
@@ -117,6 +122,10 @@ pub enum Event {
     Error(String),
     /// a toast that isn't an error
     Info(String),
+    /// the video asked for is playing (its id, the playback to control)
+    Playback(String, Arc<Playback>),
+    /// it couldn't be played (its id, why)
+    PlaybackFailed(String, String),
 }
 
 pub struct Worker {
@@ -540,6 +549,17 @@ async fn handle(shared: &Arc<Shared>, command: Command) -> Result<()> {
                 let _ = shared.events.send(Event::ImageFailed(url));
             }
         },
+        Command::Play { id, subtitles, from } => {
+            let crunchy = crunchy(shared).await?;
+            let event = match player::open(&crunchy, &id, subtitles.as_deref(), from).await {
+                Ok(playback) => Event::Playback(id, Arc::new(playback)),
+                Err(error) => {
+                    eprintln!("crunchy: playing {id}: {error:#}");
+                    Event::PlaybackFailed(id, short_error(&error))
+                }
+            };
+            let _ = shared.events.send(event);
+        }
         Command::SignOut => {
             forget_profile(shared).await;
             if let Some(session) = shared.session.lock().await.take() {

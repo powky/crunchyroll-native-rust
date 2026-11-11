@@ -13,6 +13,7 @@ mod images;
 mod keyboard;
 mod languages;
 mod music;
+mod player;
 mod profile_edit;
 mod profiles;
 mod settings;
@@ -57,6 +58,8 @@ pub enum Nav {
     SelectProfile(String),
     Alert(Alert),
     Toast(String),
+    /// play an episode or movie (from where it was left)
+    Play(Card),
 }
 
 /// What the account is: its profiles, the one chosen, and the language lists once loaded.
@@ -100,6 +103,10 @@ pub trait Page {
     }
     /// The page is done (a form saved): the app closes it.
     fn finished(&self) -> bool {
+        false
+    }
+    /// The page shows video under it: the frame starts transparent.
+    fn transparent(&self) -> bool {
         false
     }
 }
@@ -349,6 +356,7 @@ impl CrunchyApp {
             }
             Nav::Alert(alert) => self.alert = Some(alert),
             Nav::Toast(text) => self.toast(text),
+            Nav::Play(card) => self.apply(Nav::Push(Box::new(player::PlayerPage::new(card)))),
         }
     }
 
@@ -428,7 +436,8 @@ impl platform::App for CrunchyApp {
             self.stack.pop();
         }
 
-        gfx.begin(BG);
+        let video = self.stack.last().is_some_and(|page| page.transparent());
+        gfx.begin(if video { crate::gfx::Color(0.0, 0.0, 0.0, 0.0) } else { BG });
         let t = (now - self.started).as_secs_f32();
         let premium = self.state.account.premium;
         let mut ui = Ui { gfx, images: &mut self.images, worker: &self.worker, dt, t, premium };

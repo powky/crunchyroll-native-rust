@@ -172,6 +172,11 @@ impl ShowPage {
         Some(list)
     }
 
+    /// What "play" starts: the show's next episode (with its progress), else the first one listed.
+    fn to_play(&self) -> Option<Card> {
+        self.show.as_ref().and_then(|show| show.up_next.clone()).or_else(|| self.episodes()?.first().cloned())
+    }
+
     fn request_list(&mut self, env_worker: &super::worker::Worker) {
         if let Some(id) = self.list_id()
             && self.requested.insert(id.clone())
@@ -247,7 +252,11 @@ impl ShowPage {
                 }
             }
             Key::Ok => match actions[self.action] {
-                Action::Play => return Nav::Toast(NO_PLAYER.into()),
+                Action::Play => {
+                    if let Some(card) = self.to_play() {
+                        return Nav::Play(card);
+                    }
+                }
                 Action::Watchlist => {
                     if let Some(show) = self.show.as_mut() {
                         show.in_watchlist = !show.in_watchlist;
@@ -459,7 +468,11 @@ impl Page for ShowPage {
                             self.zone = Zone::Actions;
                         }
                     }
-                    Key::Ok => return Nav::Toast(NO_PLAYER.into()),
+                    Key::Ok => {
+                        if let Some(card) = self.episodes().and_then(|list| list.get(self.episode_focus).cloned()) {
+                            return Nav::Play(card);
+                        }
+                    }
                     Key::Back => return Nav::Back,
                     _ => {}
                 }

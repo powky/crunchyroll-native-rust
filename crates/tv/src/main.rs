@@ -3,6 +3,7 @@
 
 mod app;
 mod gfx;
+mod player;
 mod platform;
 
 fn main() -> anyhow::Result<()> {
