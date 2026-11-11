@@ -5,11 +5,13 @@
 //! Coordinates are the UI's 1920x1080 logical pixels whatever the framebuffer is; text is rasterised at the
 //! framebuffer's scale so it stays sharp.
 
+pub mod icons;
 pub mod text;
 
 use anyhow::{Result, anyhow};
 use glow::HasContext;
 
+pub use icons::Icon;
 pub use text::{Font, TextAtlas};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -234,12 +236,34 @@ impl Renderer {
             self.gl.use_program(Some(self.program));
             self.gl.uniform_2_f32(Some(&self.u_screen), SCREEN_W, SCREEN_H);
         }
-        self.text.set_scale(self.scale);
+        self.text.set_scale(&self.gl, self.scale);
     }
 
     pub fn end(&mut self) {
         self.flush();
+        self.clip(None);
         self.text.upload_pending(&self.gl);
+    }
+
+    /// Draws only inside `r` (in UI coordinates) until the next call; `None` draws everywhere again.
+    pub fn clip(&mut self, r: Option<Rect>) {
+        self.flush();
+        unsafe {
+            match r {
+                Some(r) => {
+                    let s = self.scale;
+                    let (_, fb_height) = self.fb;
+                    let x = (r.x * s).floor().max(0.0) as i32;
+                    let w = (r.w * s).ceil().max(0.0) as i32;
+                    let h = (r.h * s).ceil().max(0.0) as i32;
+                    // GL counts rows from the bottom
+                    let y = fb_height as i32 - ((r.y + r.h) * s).ceil() as i32;
+                    self.gl.enable(glow::SCISSOR_TEST);
+                    self.gl.scissor(x, y.max(0), w, h);
+                }
+                None => self.gl.disable(glow::SCISSOR_TEST),
+            }
+        }
     }
 
     fn use_texture(&mut self, texture: glow::NativeTexture) {
@@ -298,6 +322,18 @@ impl Renderer {
         self.quad_colors(r, [0.0, 0.0, 1.0, 1.0], colors, 0.0, MODE_SOLID);
     }
 
+    /// A gradient in a rounded rectangle.
+    pub fn gradient_rounded(&mut self, r: Rect, radius: f32, from: Color, to: Color, vertical: bool) {
+        self.use_texture(self.white.id);
+        let colors = if vertical { [from, from, to, to] } else { [from, to, from, to] };
+        self.quad_colors(r, [0.0, 0.0, 1.0, 1.0], colors, radius, MODE_SOLID);
+    }
+
+    /// A UI coordinate moved to the nearest screen pixel.
+    fn snap(&self, v: f32) -> f32 {
+        (v * self.scale).round() / self.scale
+    }
+
     /// A filled rectangle with rounded corners.
     pub fn rect(&mut self, r: Rect, radius: f32, color: Color) {
         let white = self.white.id;
@@ -320,12 +356,6 @@ impl Renderer {
         self.quad(r, uv, Color(1.0, 1.0, 1.0, alpha), radius, MODE_IMAGE);
     }
 
-    /// A picture's part `uv` stretched over `r` (backdrops placed by hand).
-    pub fn image_uv(&mut self, texture: &Texture, r: Rect, uv: [f32; 4], alpha: f32) {
-        self.use_texture(texture.id);
-        self.quad(r, uv, Color(1.0, 1.0, 1.0, alpha), 0.0, MODE_IMAGE);
-    }
-
     /// One line of text; `x, y` is the top-left of its line box. Cut with an ellipsis past `max_width`.
     /// Returns the width drawn.
     pub fn text(&mut self, font: Font, size: f32, x: f32, y: f32, text: &str, color: Color, max_width: Option<f32>) -> f32 {
@@ -336,7 +366,8 @@ impl Renderer {
         let mut width = 0.0;
         for glyph in &glyphs {
             if let Some(cell) = glyph.cell {
-                let r = Rect::new(x + glyph.x + cell.left, y + ascent - cell.top, cell.width, cell.height);
+                // on whole screen pixels: a glyph between two pixel rows gets smeared across both
+                let r = Rect::new(self.snap(x + glyph.x + cell.left), self.snap(y + ascent - cell.top), cell.width, cell.height);
                 self.quad(r, cell.uv, color, 0.0, MODE_TEXT);
             }
             width = glyph.x + glyph.advance;
@@ -364,6 +395,27 @@ impl Renderer {
             self.text(font, size, x, y + index as f32 * line_height, line, color, Some(max_width));
         }
         lines.len() as f32 * line_height
+    }
+
+    /// An icon in a `size`-tall box whose top-left is at `x`, `y` (the logo is wider than tall). Returns its width.
+    pub fn icon(&mut self, icon: Icon, x: f32, y: f32, size: f32, color: Color) -> f32 {
+        let Some(cell) = self.text.icon(icon, size) else { return size * icon.aspect() };
+        let atlas = self.text.texture();
+        self.use_texture(atlas.id);
+        let r = Rect::new(self.snap(x), self.snap(y), cell.width, cell.height);
+        self.quad(r, cell.uv, color, 0.0, MODE_TEXT);
+        cell.width
+    }
+
+    /// An icon centred on a point.
+    pub fn icon_centered(&mut self, icon: Icon, cx: f32, cy: f32, size: f32, color: Color) {
+        let w = size * icon.aspect();
+        self.icon(icon, cx - w / 2.0, cy - size / 2.0, size, color);
+    }
+
+    /// The lines `text` wraps into at `max_width`, at most `max_lines`.
+    pub fn wrap(&mut self, font: Font, size: f32, text: &str, max_width: f32, max_lines: usize) -> Vec<String> {
+        self.text.wrap(font, size, text, max_width, max_lines)
     }
 
     pub fn measure(&mut self, font: Font, size: f32, text: &str) -> f32 {

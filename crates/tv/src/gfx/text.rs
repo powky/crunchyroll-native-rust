@@ -9,8 +9,10 @@ use fontdue::{Font as FontFace, FontSettings};
 use glow::HasContext;
 
 use super::Texture;
+use super::icons::{self, Icon};
 
-const ATLAS: u32 = 1024;
+/// Atlas side at 1080p; twice that from 2x up, where glyphs take four times the room.
+const ATLAS_1X: u32 = 1024;
 const PAD: u32 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -47,7 +49,10 @@ pub struct TextAtlas {
     faces: [FontFace; 3],
     texture: Texture,
     pixels: Vec<u8>,
+    /// the atlas's side in pixels
+    size: u32,
     glyphs: HashMap<(Font, char, u32), Glyph>,
+    icons: HashMap<(Icon, u32), Option<Cell>>,
     shelf_x: u32,
     shelf_y: u32,
     shelf_h: u32,
@@ -72,13 +77,15 @@ impl TextAtlas {
             load(include_bytes!("../../../../assets/fonts/Inter-SemiBold.ttf"))?,
             load(include_bytes!("../../../../assets/fonts/Inter-ExtraBold.ttf"))?,
         ];
-        let pixels = vec![0u8; (ATLAS * ATLAS * 4) as usize];
-        let texture = unsafe { super::upload(gl, ATLAS, ATLAS, &pixels)? };
+        let pixels = vec![0u8; (ATLAS_1X * ATLAS_1X * 4) as usize];
+        let texture = unsafe { super::upload(gl, ATLAS_1X, ATLAS_1X, &pixels)? };
         Ok(TextAtlas {
             faces,
             texture,
             pixels,
+            size: ATLAS_1X,
             glyphs: HashMap::new(),
+            icons: HashMap::new(),
             shelf_x: 0,
             shelf_y: 0,
             shelf_h: 0,
@@ -91,20 +98,32 @@ impl TextAtlas {
         self.texture
     }
 
-    pub fn set_scale(&mut self, scale: f32) {
+    pub fn set_scale(&mut self, gl: &glow::Context, scale: f32) {
         if (scale - self.scale).abs() > 0.001 {
             self.scale = scale;
+            let size = if scale > 1.5 { ATLAS_1X * 2 } else { ATLAS_1X };
+            if size != self.size {
+                self.pixels = vec![0u8; (size * size * 4) as usize];
+                if let Ok(texture) = unsafe { super::upload(gl, size, size, &self.pixels) } {
+                    unsafe { gl.delete_texture(self.texture.id) };
+                    self.texture = texture;
+                    self.size = size;
+                } else {
+                    self.pixels = vec![0u8; (self.size * self.size * 4) as usize];
+                }
+            }
             self.reset();
         }
     }
 
     fn reset(&mut self) {
         self.glyphs.clear();
+        self.icons.clear();
         self.pixels.iter_mut().for_each(|p| *p = 0);
         self.shelf_x = 0;
         self.shelf_y = 0;
         self.shelf_h = 0;
-        self.dirty = Some((0, ATLAS));
+        self.dirty = Some((0, self.size));
     }
 
     fn px(&self, size: f32) -> u32 {
@@ -129,41 +148,62 @@ impl TextAtlas {
         let mut cell = None;
         if metrics.width > 0 && metrics.height > 0 {
             let (w, h) = (metrics.width as u32, metrics.height as u32);
-            if self.shelf_x + w + PAD > ATLAS {
-                self.shelf_x = 0;
-                self.shelf_y += self.shelf_h + PAD;
-                self.shelf_h = 0;
-            }
-            if self.shelf_y + h + PAD > ATLAS {
-                // full: start over (rare; glyphs come back as they're drawn again)
-                self.reset();
-            }
-            let (x0, y0) = (self.shelf_x, self.shelf_y);
-            for row in 0..h {
-                for col in 0..w {
-                    let alpha = coverage[(row * w + col) as usize];
-                    let at = (((y0 + row) * ATLAS + x0 + col) * 4) as usize;
-                    self.pixels[at..at + 4].copy_from_slice(&[255, 255, 255, alpha]);
-                }
-            }
-            self.shelf_x += w + PAD;
-            self.shelf_h = self.shelf_h.max(h);
-            self.dirty = Some(match self.dirty {
-                Some((from, to)) => (from.min(y0), to.max(y0 + h)),
-                None => (y0, y0 + h),
-            });
-            let atlas = ATLAS as f32;
+            let uv = self.place(w, h, &coverage);
             cell = Some(Cell {
                 left: metrics.xmin as f32 / self.scale,
                 top: (metrics.ymin as f32 + h as f32) / self.scale,
                 width: w as f32 / self.scale,
                 height: h as f32 / self.scale,
-                uv: [x0 as f32 / atlas, y0 as f32 / atlas, (x0 + w) as f32 / atlas, (y0 + h) as f32 / atlas],
+                uv,
             });
         }
         let glyph = Glyph { cell, advance };
         self.glyphs.insert((font, ch, px), glyph);
         glyph
+    }
+
+    /// Copies a coverage bitmap into the atlas; returns where it went, as texture coordinates.
+    fn place(&mut self, w: u32, h: u32, coverage: &[u8]) -> [f32; 4] {
+        let atlas_size = self.size;
+        if self.shelf_x + w + PAD > atlas_size {
+            self.shelf_x = 0;
+            self.shelf_y += self.shelf_h + PAD;
+            self.shelf_h = 0;
+        }
+        if self.shelf_y + h + PAD > atlas_size {
+            // full: start over (rare; glyphs come back as they're drawn again)
+            self.reset();
+        }
+        let (x0, y0) = (self.shelf_x, self.shelf_y);
+        for row in 0..h {
+            for col in 0..w {
+                let alpha = coverage[(row * w + col) as usize];
+                let at = (((y0 + row) * atlas_size + x0 + col) * 4) as usize;
+                self.pixels[at..at + 4].copy_from_slice(&[255, 255, 255, alpha]);
+            }
+        }
+        self.shelf_x += w + PAD;
+        self.shelf_h = self.shelf_h.max(h);
+        self.dirty = Some(match self.dirty {
+            Some((from, to)) => (from.min(y0), to.max(y0 + h)),
+            None => (y0, y0 + h),
+        });
+        let atlas = atlas_size as f32;
+        [x0 as f32 / atlas, y0 as f32 / atlas, (x0 + w) as f32 / atlas, (y0 + h) as f32 / atlas]
+    }
+
+    /// An icon `size` logical pixels tall (its box's top-left at 0,0), or `None` when the set has no such icon.
+    pub fn icon(&mut self, icon: Icon, size: f32) -> Option<Cell> {
+        let px = self.px(size);
+        if let Some(cell) = self.icons.get(&(icon, px)) {
+            return *cell;
+        }
+        let cell = icons::rasterize(icon, px).map(|(w, h, coverage)| {
+            let uv = self.place(w, h, &coverage);
+            Cell { left: 0.0, top: 0.0, width: w as f32 / self.scale, height: h as f32 / self.scale, uv }
+        });
+        self.icons.insert((icon, px), cell);
+        cell
     }
 
     fn kern(&self, font: Font, size: f32, left: char, right: char) -> f32 {
@@ -233,9 +273,10 @@ impl TextAtlas {
     /// Sends the glyphs rasterised since the last call to the GPU.
     pub fn upload_pending(&mut self, gl: &glow::Context) {
         let Some((from, to)) = self.dirty.take() else { return };
-        let to = to.min(ATLAS);
-        let start = (from * ATLAS * 4) as usize;
-        let end = (to * ATLAS * 4) as usize;
+        let size = self.size;
+        let to = to.min(size);
+        let start = (from * size * 4) as usize;
+        let end = (to * size * 4) as usize;
         unsafe {
             gl.bind_texture(glow::TEXTURE_2D, Some(self.texture.id));
             gl.tex_sub_image_2d(
@@ -243,7 +284,7 @@ impl TextAtlas {
                 0,
                 0,
                 from as i32,
-                ATLAS as i32,
+                size as i32,
                 (to - from) as i32,
                 glow::RGBA,
                 glow::UNSIGNED_BYTE,
