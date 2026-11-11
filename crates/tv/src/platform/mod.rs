@@ -2,6 +2,7 @@
 //! that simulates it (desktop OpenGL), both drawing through the same [`crate::gfx::Renderer`].
 
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use crate::gfx::Renderer;
 
@@ -27,6 +28,32 @@ pub enum Key {
 pub trait App {
     /// Draws a frame. Returns `false` to quit.
     fn frame(&mut self, gfx: &mut Renderer, keys: &[Key]) -> bool;
+}
+
+/// The window the TV's media pipeline shows video in: a part of our surface handed to the compositor, which puts the
+/// decoded picture there, under what we draw (so the app draws transparent where it should show). The app asks for
+/// it before playing and lets it go after; its id arrives a moment later and goes in the pipeline's load payload.
+static VIDEO_WINDOW: Mutex<(bool, Option<String>)> = Mutex::new((false, None));
+
+pub fn want_video_window(wanted: bool) {
+    VIDEO_WINDOW.lock().unwrap().0 = wanted;
+}
+
+/// The video window's id once the compositor assigned one.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn video_window() -> Option<String> {
+    let window = VIDEO_WINDOW.lock().unwrap();
+    if window.0 { window.1.clone() } else { None }
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn video_window_wanted() -> bool {
+    VIDEO_WINDOW.lock().unwrap().0
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn set_video_window(id: Option<String>) {
+    VIDEO_WINDOW.lock().unwrap().1 = id;
 }
 
 /// A writable folder for the session, caches and logs: the first of the candidates the app can write to.

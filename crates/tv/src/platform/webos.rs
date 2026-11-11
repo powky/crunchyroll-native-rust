@@ -13,7 +13,7 @@ use anyhow::{Context, Result, anyhow};
 use khronos_egl as egl;
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::{
-    wl_compositor, wl_keyboard, wl_output, wl_registry, wl_seat, wl_shell, wl_shell_surface, wl_surface,
+    wl_compositor, wl_keyboard, wl_output, wl_region, wl_registry, wl_seat, wl_shell, wl_shell_surface, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum};
 
@@ -34,6 +34,22 @@ pub mod shell {
     wayland_scanner::generate_client_code!("protocols/webos-shell.xml");
 }
 
+#[allow(dead_code, non_camel_case_types, non_upper_case_globals, clippy::all)]
+pub mod foreign {
+    use wayland_client;
+    use wayland_client::protocol::*;
+
+    pub mod __interfaces {
+        use wayland_client::protocol::__interfaces::*;
+        wayland_scanner::generate_interfaces!("protocols/webos-foreign.xml");
+    }
+    use self::__interfaces::*;
+
+    wayland_scanner::generate_client_code!("protocols/webos-foreign.xml");
+}
+
+use foreign::wl_webos_exported::{self, WlWebosExported};
+use foreign::wl_webos_foreign::WlWebosForeign;
 use shell::wl_webos_shell::WlWebosShell;
 use shell::wl_webos_shell_surface::{self, WlWebosShellSurface};
 
@@ -68,6 +84,7 @@ pub fn run(mut app: impl App + 'static) -> Result<()> {
     let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 1..=4, ()).context("wl_compositor")?;
     let core_shell: wl_shell::WlShell = globals.bind(&qh, 1..=1, ()).context("wl_shell")?;
     let shell: WlWebosShell = globals.bind(&qh, 1..=1, ()).context("wl_webos_shell")?;
+    let foreign: Option<WlWebosForeign> = globals.bind(&qh, 1..=1, ()).ok();
     // the remote may sit on a seat of its own: take every one
     let mut seats = Vec::new();
     let mut outputs = Vec::new();
@@ -139,8 +156,32 @@ pub fn run(mut app: impl App + 'static) -> Result<()> {
     let mut window_start = std::time::Instant::now();
     let mut last_frame = window_start;
     let mut worst = Duration::ZERO;
+    let mut video: Option<WlWebosExported> = None;
     loop {
         pump(&connection, &mut queue, &mut state)?;
+        match (&video, super::video_window_wanted(), &foreign) {
+            (None, true, Some(foreign)) => {
+                let exported = foreign.export_element(&surface, foreign::wl_webos_foreign::WebosExportedType::VideoObject as u32, &qh, ());
+                // the whole screen, in the UI's coordinates
+                let source = compositor.create_region(&qh, ());
+                source.add(0, 0, WIDTH, HEIGHT);
+                let destination = compositor.create_region(&qh, ());
+                destination.add(0, 0, WIDTH, HEIGHT);
+                exported.set_exported_window(&source, &destination);
+                source.destroy();
+                destination.destroy();
+                video = Some(exported);
+                eprintln!("crunchy: video window asked for");
+            }
+            (Some(_), false, _) => {
+                if let Some(exported) = video.take() {
+                    exported.destroy();
+                }
+                super::set_video_window(None);
+                eprintln!("crunchy: video window let go");
+            }
+            _ => {}
+        }
         if state.closed {
             break;
         }
@@ -243,6 +284,22 @@ fn map_key(code: u32) -> Key {
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
     fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+}
+
+impl Dispatch<WlWebosForeign, ()> for State {
+    fn event(_: &mut Self, _: &WlWebosForeign, _: foreign::wl_webos_foreign::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+}
+
+impl Dispatch<WlWebosExported, ()> for State {
+    fn event(_: &mut Self, _: &WlWebosExported, event: wl_webos_exported::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        let wl_webos_exported::Event::WindowIdAssigned { window_id, exported_type } = event;
+        eprintln!("crunchy: video window {window_id} (type {exported_type})");
+        super::set_video_window(Some(window_id));
+    }
+}
+
+impl Dispatch<wl_region::WlRegion, ()> for State {
+    fn event(_: &mut Self, _: &wl_region::WlRegion, _: wl_region::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
 }
 
 impl Dispatch<wl_compositor::WlCompositor, ()> for State {

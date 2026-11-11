@@ -23,6 +23,7 @@ raw-window-handle = "0.6.2"
 winit = "0.30.13"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+bitflags = "2"
 khronos-egl = { version = "6.0.0", features = ["dynamic"] }
 wayland-backend = { version = "0.3.17", features = ["client_system", "dlopen"] }
 wayland-client = "0.31.15"

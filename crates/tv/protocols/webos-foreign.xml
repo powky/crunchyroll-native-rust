@@ -6,9 +6,9 @@
       different clients or a punch-through region to a surface that acts the main
       window.
       You can set a region on the main window where a foreign surface or a
-      punch-through region can be placed. It is called &quot;exported&quot; region or window
+      punch-through region can be placed. It is called 'exported' region or window
       in this protocol. Then you can request the compositor to punch through that
-      region or attach another surface as an &quot;imported&quot; content.
+      region or attach another surface as an 'imported' content.
     </description>
     <request name="destroy" type="destructor">
       <description summary="destroy object">
