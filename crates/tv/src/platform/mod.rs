@@ -29,20 +29,50 @@ pub trait App {
     fn frame(&mut self, gfx: &mut Renderer, keys: &[Key]) -> bool;
 }
 
-/// A writable folder for the session, caches and logs.
+/// A writable folder for the session, caches and logs: the first of the candidates the app can write to.
 pub fn data_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("CRUNCHY_DATA_DIR") {
         return PathBuf::from(dir);
     }
+    let candidates: Vec<PathBuf> = if cfg!(target_os = "linux") {
+        vec![
+            // survives reinstalls; may not be writable for a sandboxed app
+            PathBuf::from("/media/developer/apps/usr/palm/data/com.ian.crunchy"),
+            std::env::var("HOME").map(|home| PathBuf::from(home).join(".crunchy")).unwrap_or_default(),
+            PathBuf::from("/tmp/com.ian.crunchy"),
+        ]
+    } else {
+        vec![std::env::temp_dir().join("crunchy-sim")]
+    };
+    for dir in candidates.into_iter().filter(|dir| !dir.as_os_str().is_empty()) {
+        let probe = dir.join(".write-test");
+        if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(&probe, b"").is_ok() {
+            let _ = std::fs::remove_file(probe);
+            return dir;
+        }
+    }
+    std::env::temp_dir()
+}
+
+/// On the TV nothing reads stderr: send it to `crunchy.log` in the data folder (the previous run's kept as `.1`).
+pub fn log_to_file(dir: &std::path::Path) {
     #[cfg(target_os = "linux")]
     {
-        // the app's own folder on the TV's developer partition survives reinstalls of the same version
-        PathBuf::from("/media/developer/apps/usr/palm/data/com.ian.crunchy")
+        use std::os::fd::AsRawFd;
+        unsafe extern "C" {
+            fn dup2(old: i32, new: i32) -> i32;
+        }
+        let path = dir.join("crunchy.log");
+        let _ = std::fs::rename(&path, dir.join("crunchy.log.1"));
+        if let Ok(file) = std::fs::File::create(&path) {
+            unsafe {
+                dup2(file.as_raw_fd(), 2);
+            }
+            std::mem::forget(file);
+        }
     }
     #[cfg(not(target_os = "linux"))]
-    {
-        std::env::temp_dir().join("crunchy-sim")
-    }
+    let _ = dir;
 }
 
 #[cfg(target_os = "macos")]

@@ -6,5 +6,11 @@ mod gfx;
 mod platform;
 
 fn main() -> anyhow::Result<()> {
-    platform::run(app::CrunchyApp::new())
+    platform::log_to_file(&platform::data_dir());
+    eprintln!("crunchy {} starting, args {:?}", env!("CARGO_PKG_VERSION"), std::env::args().collect::<Vec<_>>());
+    let result = platform::run(app::CrunchyApp::new());
+    if let Err(error) = &result {
+        eprintln!("crunchy: fatal: {error:#}");
+    }
+    result
 }
