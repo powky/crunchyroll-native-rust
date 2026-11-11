@@ -17,7 +17,7 @@ Needs Rust (stable, with the `armv7-unknown-linux-gnueabi` target), [Zig](https:
 
 ```sh
 cargo run -p crunchy-tv          # simulator on macOS: arrows, Enter, Esc
-./tools/build.sh && ./tools/package.sh   # build/com.ian.crunchy_<version>_arm.ipk
+./tools/build.sh && ./tools/package.sh   # build/com.crunchyroll.webos.native_<version>_arm.ipk
 ./tools/install.sh               # install on the TV and launch it (rooted TV, over ssh)
 ./tools/push.sh                  # dev loop: replace the installed binary and relaunch
 ```

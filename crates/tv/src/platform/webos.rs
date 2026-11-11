@@ -56,7 +56,6 @@ use shell::wl_webos_shell_surface::{self, WlWebosShellSurface};
 /// The UI's logical size; the surface is the screen's real size (3840x2160 on a 4K TV) and the renderer scales.
 const WIDTH: i32 = 1920;
 const HEIGHT: i32 = 1080;
-const APP_ID: &str = "com.ian.crunchy";
 
 #[derive(Default)]
 struct State {
@@ -102,8 +101,7 @@ pub fn run(mut app: impl App + 'static) -> Result<()> {
     let window_role = core_shell.get_shell_surface(&surface, &qh, ());
     window_role.set_toplevel();
     let shell_surface = shell.get_shell_surface(&surface, &qh, ());
-    let app_id = std::env::var("APPID").unwrap_or_else(|_| APP_ID.to_string());
-    shell_surface.set_property("appId".to_string(), app_id);
+    shell_surface.set_property("appId".to_string(), super::app_id());
     shell_surface.set_property("_WEBOS_WINDOW_TYPE".to_string(), "_WEBOS_WINDOW_TYPE_CARD".to_string());
     // without it the system takes Back (what LG's SDL sets for SDL_WEBOS_ACCESS_POLICY_KEYS_BACK)
     shell_surface.set_property("_WEBOS_ACCESS_POLICY_KEYS_BACK".to_string(), "true".to_string());

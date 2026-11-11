@@ -164,7 +164,7 @@ mod tv {
             tokio::time::sleep(Duration::from_millis(50)).await;
         };
         let media = Media { video: video_rendition, audio: audio_rendition };
-        let setup = Setup { app_id: std::env::var("APPID").unwrap_or("com.ian.crunchy".into()), window_id, from };
+        let setup = Setup { app_id: crate::platform::app_id(), window_id, from };
         Player::start(media, cdm, setup, tokio::runtime::Handle::current())
     }
 

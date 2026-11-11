@@ -1,5 +1,5 @@
 #!/bin/sh
-# build/app -> build/com.ian.crunchy_<version>_arm.ipk
+# build/app -> build/<app id>_<version>_arm.ipk
 set -e
 cd "$(dirname "$0")/.."
 ARES=${ARES:-$HOME/dev/tv/launcher/tools/ares/node_modules/.bin}

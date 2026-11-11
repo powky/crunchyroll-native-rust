@@ -30,6 +30,16 @@ pub trait App {
     fn frame(&mut self, gfx: &mut Renderer, keys: &[Key]) -> bool;
 }
 
+/// The app's id on the TV (`pkg/appinfo.json`): its data folder, its window and its media pipeline go by it.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub const APP_ID: &str = "com.crunchyroll.webos.native";
+
+/// The id SAM launched the app with (`APPID`), else [`APP_ID`].
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn app_id() -> String {
+    std::env::var("APPID").unwrap_or_else(|_| APP_ID.to_string())
+}
+
 /// The window the TV's media pipeline shows video in: a part of our surface handed to the compositor, which puts the
 /// decoded picture there, under what we draw (so the app draws transparent where it should show). The app asks for
 /// it before playing and lets it go after; its id arrives a moment later and goes in the pipeline's load payload.
@@ -64,9 +74,9 @@ pub fn data_dir() -> PathBuf {
     let candidates: Vec<PathBuf> = if cfg!(target_os = "linux") {
         vec![
             // survives reinstalls; may not be writable for a sandboxed app
-            PathBuf::from("/media/developer/apps/usr/palm/data/com.ian.crunchy"),
+            PathBuf::from(format!("/media/developer/apps/usr/palm/data/{APP_ID}")),
             std::env::var("HOME").map(|home| PathBuf::from(home).join(".crunchy")).unwrap_or_default(),
-            PathBuf::from("/tmp/com.ian.crunchy"),
+            PathBuf::from(format!("/tmp/{APP_ID}")),
         ]
     } else {
         vec![std::env::temp_dir().join("crunchy-sim")]
