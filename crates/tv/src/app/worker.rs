@@ -18,6 +18,9 @@ use crunchy_core::session::Session;
 use crunchy_core::store::Store;
 use tokio::sync::{Mutex, Semaphore, mpsc};
 
+/// Sign-in codes shown one after another (5 minutes each) before the screen asks for OK.
+const CODE_RENEWALS: usize = 6;
+
 pub enum Command {
     Start,
     RequestCode,
@@ -158,36 +161,37 @@ async fn handle(shared: &Arc<Shared>, command: Command) -> Result<()> {
             let client = platform.http_client()?;
             let store = Store::new(&shared.dir);
             let device = Session::device_for(&store)?;
-            let code = auth::request_code(&client, &platform).await?;
-            let _ = shared.events.send(Event::Code { user_code: code.user_code.clone() });
-            let deadline = tokio::time::Instant::now() + code.expires_in;
-            loop {
-                tokio::time::sleep(code.interval).await;
-                if tokio::time::Instant::now() > deadline {
-                    let _ = shared.events.send(Event::CodeExpired);
-                    break;
-                }
-                match auth::poll(&client, &platform, &device, &code).await? {
-                    Poll::Pending => continue,
-                    Poll::Expired => {
-                        let _ = shared.events.send(Event::CodeExpired);
-                        break;
-                    }
-                    Poll::Authorized { refresh_token } => {
-                        let session = Session::from_refresh_token(store, platform, locale(), refresh_token).await?;
-                        *shared.session.lock().await = Some(session);
-                        send_profiles(shared).await?;
-                        break;
+            // a code lasts 5 minutes: show a fresh one when it runs out, and only after half an hour ask for OK
+            for _ in 0..CODE_RENEWALS {
+                let code = auth::request_code(&client, &platform).await?;
+                let _ = shared.events.send(Event::Code { user_code: code.user_code.clone() });
+                let deadline = tokio::time::Instant::now() + code.expires_in;
+                while tokio::time::Instant::now() < deadline {
+                    tokio::time::sleep(code.interval).await;
+                    match auth::poll(&client, &platform, &device, &code).await? {
+                        Poll::Pending => continue,
+                        Poll::Expired => break,
+                        Poll::Authorized { refresh_token } => {
+                            let session = Session::from_refresh_token(store, platform, locale(), refresh_token).await?;
+                            *shared.session.lock().await = Some(session);
+                            return send_profiles(shared).await;
+                        }
                     }
                 }
             }
+            let _ = shared.events.send(Event::CodeExpired);
         }
         Command::SelectProfile(id) => {
             {
                 let mut guard = shared.session.lock().await;
                 let session = guard.as_mut().context("not signed in")?;
-                if session.profile_id() != Some(id.as_str()) {
-                    session.select_profile(&id).await?;
+                if session.profile_id() != Some(id.as_str())
+                    && let Err(error) = session.select_profile(&id).await
+                {
+                    // back to the list the screen left for the skeleton
+                    drop(guard);
+                    send_profiles(shared).await?;
+                    return Err(error);
                 }
             }
             Box::pin(handle(shared, Command::LoadHome)).await?;

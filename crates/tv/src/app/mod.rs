@@ -143,6 +143,8 @@ impl CrunchyApp {
                     Key::Ok => {
                         if let Some(profile) = list.get(*focus) {
                             self.worker.send(Command::SelectProfile(profile.id.clone()));
+                            // the skeleton until the home arrives, so a second OK doesn't load it twice
+                            self.screen = Screen::Starting;
                         }
                     }
                     Key::Back => return false,
