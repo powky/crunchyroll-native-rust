@@ -8,8 +8,13 @@ use crate::gfx::Color;
 pub const BG: Color = Color::rgb(0x0b0b0e);
 pub const TEXT: Color = Color::rgb(0xf5f5f7);
 pub const MUTED: Color = Color(0.92, 0.92, 0.96, 0.6);
+pub const DIM: Color = Color(0.92, 0.92, 0.96, 0.42);
 pub const SURFACE: Color = Color::rgb(0x1c1c21);
 pub const ACCENT: Color = Color::rgb(0xff5e00);
+pub const GOLD: Color = Color::rgb(0xffc94d);
+/// A control at rest: a light veil over whatever is behind.
+pub const VEIL: Color = Color(1.0, 1.0, 1.0, 0.12);
+pub const VEIL_STRONG: Color = Color(1.0, 1.0, 1.0, 0.22);
 
 /// Side margin of every screen.
 pub const PAD: f32 = 48.0;
@@ -53,12 +58,53 @@ pub fn card_subtitle(card: &Card) -> String {
                 parts.push(year.to_string());
             }
             if let Some(seasons) = card.season_count.filter(|count| *count > 0) {
-                parts.push(if seasons == 1 { "1 temporada".to_string() } else { format!("{seasons} temporadas") });
+                parts.push(seasons_text(seasons));
             }
             parts.join(" · ")
         }
-        Kind::MovieListing | Kind::Movie => "Película".into(),
+        Kind::MovieListing | Kind::Movie => match card.year {
+            Some(year) => format!("{year} · Película"),
+            None => "Película".into(),
+        },
+        Kind::MusicVideo | Kind::Concert => {
+            let minutes = card.episode.as_ref().map(|e| e.duration_secs).filter(|d| *d > 0).map(|d| format!("{} min", ((d as f32 / 60.0).round() as u32).max(1)));
+            [card.artist.clone(), minutes].into_iter().flatten().collect::<Vec<_>>().join(" · ")
+        }
+        Kind::Artist => "Artista".into(),
         Kind::Season => String::new(),
+    }
+}
+
+pub fn seasons_text(count: u32) -> String {
+    if count == 1 { "1 temporada".into() } else { format!("{count} temporadas") }
+}
+
+pub fn episodes_text(count: u32) -> String {
+    if count == 1 { "1 episodio".into() } else { format!("{count} episodios") }
+}
+
+/// "Sub | Dob", "Sub", "Dob".
+pub fn audio_text(card: &Card) -> Option<&'static str> {
+    match (card.subbed, card.dubbed) {
+        (true, true) => Some("Sub | Dob"),
+        (true, false) => Some("Sub"),
+        (false, true) => Some("Dob"),
+        (false, false) => None,
+    }
+}
+
+/// "4,8": Spanish decimals.
+pub fn rating_text(rating: f32) -> String {
+    format!("{rating:.1}").replace('.', ",")
+}
+
+/// What kind of show it is, for the eyebrow over a hero.
+pub fn eyebrow(kind: Kind) -> &'static str {
+    match kind {
+        Kind::MovieListing | Kind::Movie => "PELÍCULA",
+        Kind::MusicVideo | Kind::Concert => "MÚSICA",
+        Kind::Artist => "ARTISTA",
+        _ => "SERIES",
     }
 }
 
