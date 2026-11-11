@@ -1,0 +1,31 @@
+[package]
+name = "crunchy-tv"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+crunchy-core = { version = "0.1.0", path = "../core" }
+fontdue = "0.9.5"
+futures-util = "0.3.34"
+glow = "0.18.0"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+glutin = "0.32.3"
+glutin-winit = "0.5.0"
+raw-window-handle = "0.6.2"
+winit = "0.30.13"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+khronos-egl = { version = "6.0.0", features = ["dynamic"] }
+wayland-backend = { version = "0.3.17", features = ["client_system", "dlopen"] }
+wayland-client = "0.31.15"
+wayland-egl = "0.32.11"
+wayland-scanner = "0.31.11"
+
+[[bin]]
+name = "crunchy"
+path = "src/main.rs"
