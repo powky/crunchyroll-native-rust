@@ -6,9 +6,11 @@ Unofficial; not affiliated with Crunchyroll or LG.
 
 - `crates/core` — the backend on [crunchyroll-rs](https://docs.rs/crunchyroll-rs): a session that signs in with a
   code shown on the TV (crunchyroll.com/activate) and stays signed in, profiles, and the home feed as rows.
+- `crates/player` — video without a browser: fMP4 demuxing, the TV's Widevine CDM (Chromium's library CDM
+  interface) and LG's in-process media pipeline fed sample by sample.
 - `crates/tv` — the app: a small GPU renderer (`gfx`), the TV and simulator platforms (`platform`), the screens and the
   network worker (`app`).
-- `docs/feasibility.md` — what was proven on the TV, including the native DRM path; video comes last.
+- `docs/feasibility.md` — what was proven on the TV, and how encrypted video plays natively.
 
 ## Build
 

@@ -34,29 +34,35 @@ GPL-3.0). Unlike Plex, every Crunchyroll stream is DRM-protected; that is the wh
    (avc1.4D401E / 64001F / 640028) + AAC 192k; the manifest needs the bearer token, the segments (absolute BaseURLs on
    `vod-gcp.crunchyrollcdn.com`, signed query) don't. Streams are released with `DELETE /v1/token/{id}/{token}` (204).
 
-## What blocks
+## What blocked, and how video plays now (2026-11-11)
 
-**The player's URI mode doesn't play Crunchyroll's encrypted DASH.** Served the manifest (through the local proxy):
+**The player's URI mode doesn't play Crunchyroll's encrypted DASH.** Served the manifest through a local proxy, it
+either sat idle (the CDN's HTTPS) or fetched the init segments and `sidx` and then **the pipeline process died**
+(`errorCode 1000, pipeline died abnormally`), with PlayReady and Widevine alike. URI mode is a dead end.
 
-- With the CDN's own segment URLs, it fetches the manifest and then sits idle (most likely its HTTP stack failing on
-  the CDN's HTTPS; never reaches track info).
-- With segments proxied over local HTTP, it fetches the video and audio init + `sidx` ranges and then **the pipeline
-  process dies** (`errorCode 1000, pipeline died abnormally`) — with PlayReady and with Widevine alike, license or not.
+**Buffer feed works, the way the TV's Chromium does it** (`crates/player`):
 
-LG documents the native player for PlayReady with URI/Smooth and HLS only; Widevine/DASH is meant for MSE/EME in the
-browser. So URI mode is a dead end for this content, short of finding which box crashes the parser.
+- Chromium's own load payload for Crunchyroll, captured with `ls-monitor` (it's in `setResourcePolicyExtraInfo`):
+  `mediaTransportType: BUFFERSTREAM`, H264/AAC, `format: RAW`, `esInfo.ptsToDecode` (the start), and `windowId`, an
+  exported Wayland window (`wl_webos_foreign.export_element`, type video). The pipeline imports that window and the
+  compositor punches the video through it.
+- EME runs in-process: `libwvcdm_shared.so` is a Chromium library CDM (interface 10: `CreateCdmInstance`,
+  `InitializeCdmModule_10`). We host it like Chromium (`Initialize(false, false, false)`, the license server's service
+  certificate, a temporary CENC session); the license comes from Crunchyroll's proxy with the stream's token.
+  Initialized that way, **`Decrypt` hands back clear samples** (SW_SECURE_CRYPTO, what the web app asks for too), so
+  the pipeline is loaded without `drm`/`svpVersion` and fed plain elementary streams.
+- Samples: fMP4 demuxed (`trun`, `senc`), H.264 rewritten to Annex B with SPS/PPS before keyframes, AAC behind ADTS
+  headers; subsamples adjusted so the encrypted runs keep their offsets.
+- `StarfishMediaAPIs` (libplayerAPIs) through its mangled symbols: constructed with no id (the argument is the media
+  server connection's id, not the app's), `Load` with a callback context, `Feed` answering `{"returnValue":"Ok"}` /
+  `"BufferFull"`, and **`Play` only once `isLoadCompleted()`** (earlier it's ignored: the first frame shows and the
+  clock never starts). With `queryPosition` there are no position events: `getCurrentPlaytime()` is polled. The
+  pipeline takes over a minute of data, so feeding stops 20 s past the position.
+- Gotchas: the pipeline needs the app's luna role (from an ssh shell `LSRegister` fails and the library exits) and a
+  foreground window (else the resources wait as background and time out after 20 s).
 
-## Ways forward for video (in order of promise)
-
-1. **Buffer feed (what PlxNative, the browser's MSE and YouTube's Cobalt do):** the app does DASH itself (manifest,
-   `sidx`, segment requests, fMP4 demux) and feeds samples to Starfish (`StarfishMediaAPIs::Feed`, the C++ seam PlxNative
-   has in `src/starfish.c`), passing the encrypted samples with their CENC data (`senc`/IV/subsamples) and the DRM
-   `clientId` so decryption happens in the TV's secure path. Needs reverse-engineering the feed's DRM options (the
-   browser on this TV does exactly this for Widevine EME, so the capability is there).
-2. **Find the URI-mode crash:** rewrite the init segments or manifest (e.g. drop the Widevine `pssh`, `sidx` →
-   SegmentList) until the parser survives. Cheap experiments, uncertain.
-3. **Fallback while 1 is built:** native browsing (the slow part today) and hand playback to the existing web app by
-   deep link. Not "no Chromium", but usable from day one.
+Hardsubbed streams (Crunchyroll offers one per subtitle language) give subtitles without an ASS renderer for now.
+`crates/player/examples/spike.rs` checks the DRM side from an ssh shell (stream, license, decrypt), as the app's user.
 
 ## Everything else is low risk
 
@@ -64,5 +70,5 @@ UI on GLES2 at 60 fps, the Crunchyroll API (auth, profiles, home feed, CMS, play
 caching, ASS subtitles (bundle libass or draw them), packaging as an IPK, and the dev loop over SSH all follow PlxNative's
 proven path on an older TV than this one.
 
-`tools/spikes/native-drm-spike.js` is the experiment above (Node 8 on the TV; it reads a bearer token from a file the
+`tools/spikes/native-drm-spike.js` is the URI-mode experiment above (Node 8 on the TV; it reads a bearer token from a file the
 web app's license request provides and never prints it).
