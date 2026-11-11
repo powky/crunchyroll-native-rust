@@ -1,6 +1,6 @@
 {
   "id": "com.crunchyroll.webos.native",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "vendor": "Ian",
   "type": "native",
   "main": "crunchy",
@@ -8,7 +8,7 @@
   "appDescription": "Native Crunchyroll client (unofficial)",
   "icon": "icon.png",
   "largeIcon": "largeIcon.png",
-  "iconColor": "#0b0b0e",
+  "iconColor": "#f26a10",
   "transparent": true,
   "requiredMemory": 160
 }
