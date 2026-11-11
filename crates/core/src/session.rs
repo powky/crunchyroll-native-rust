@@ -29,7 +29,7 @@ pub fn device_identifier(saved: &Saved) -> DeviceIdentifier {
 impl Session {
     /// The session saved last time, or `None` when there's none (or it no longer works).
     pub async fn restore(store: Store, platform: Platform, locale: Locale) -> Result<Option<Session>> {
-        let saved = store.load();
+        let saved = store.try_load().context("reading the saved session")?;
         let Some(refresh_token) = saved.refresh_token.clone() else {
             return Ok(None);
         };
@@ -63,7 +63,7 @@ impl Session {
         locale: Locale,
         refresh_token: String,
     ) -> Result<Session> {
-        let mut saved = store.load();
+        let mut saved = store.try_load().context("reading the saved session")?;
         let crunchy = platform
             .builder()
             .locale(locale.clone())
@@ -78,7 +78,7 @@ impl Session {
 
     /// The device identity to sign in with, the same one a restored session will use.
     pub fn device_for(store: &Store) -> Result<DeviceIdentifier> {
-        let saved = store.load();
+        let saved = store.try_load().context("reading the saved session")?;
         // keep the device id from the first launch: tokens are bound to it
         store.save(&saved).context("saving the device id")?;
         Ok(device_identifier(&saved))

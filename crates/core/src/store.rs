@@ -25,13 +25,25 @@ impl Store {
         Self { path: dir.as_ref().join("session.json") }
     }
 
-    /// The saved state, or a fresh one with a new device id.
-    pub fn load(&self) -> Saved {
-        let saved: Option<Saved> = fs::read(&self.path).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok());
-        match saved {
+    /// The saved state, or a fresh one with a new device id when there's none (or it's unreadable garbage). A file
+    /// that's there but can't be opened is an error: starting over would overwrite the session in it.
+    pub fn try_load(&self) -> std::io::Result<Saved> {
+        let bytes = match fs::read(&self.path) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        };
+        let saved: Option<Saved> = bytes.and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        Ok(match saved {
             Some(saved) if !saved.device_id.is_empty() => saved,
             _ => Saved { device_id: uuid::Uuid::new_v4().to_string(), ..Default::default() },
-        }
+        })
+    }
+
+    /// [`Store::try_load`], with an unopenable file treated as no session (nothing is saved over it unless the caller
+    /// saves).
+    pub fn load(&self) -> Saved {
+        self.try_load().unwrap_or_else(|_| Saved { device_id: uuid::Uuid::new_v4().to_string(), ..Default::default() })
     }
 
     /// Replaces the file atomically (a power cut mid-write leaves the old one).
