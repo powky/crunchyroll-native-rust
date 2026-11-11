@@ -36,13 +36,13 @@ running in LG's web engine):
 |---|---|---|
 | Cold start, launch → window on screen | **0.5 s** | 3.5–3.8 s |
 | Profiles on screen after a cold start | **1.0 s** | — |
-| CPU while navigating | **0.58 cores** | 1.62 cores |
-| RAM after navigating (PSS) | **≈32 MB** | ≈140 MB |
-| GPU memory after navigating | **≈105 MB** | ≈296 MB |
+| CPU while navigating | **0.53 cores** | 1.62 cores |
+| RAM after navigating (PSS) | **≈33 MB** | ≈140 MB |
+| GPU memory after navigating | **≈102 MB** | ≈296 MB |
 | Processes | **1** | 4 (renderer, Node service, a utility process, plus the shared WebAppMgr) |
 | Navigation | **60 fps** (16.7 ms a frame) | — |
-| CPU at rest | 3 % of one core | 1.2 % |
-| Playback: OK → first frame | 2.2–2.8 s (typical) | — |
+| CPU at rest | 1.2 % of one core | 1.2 % |
+| Playback: OK → first frame | **2.0 s** (2.2–2.8 s without the look-ahead) | — |
 
 <sub>RAM is PSS from `/proc/<pid>/smaps_rollup`; GPU memory from `/proc/gpu/<pid>` (4 KiB pages); CPU from each
 process's utime + stime; start times from webOS's own `NL_APP_LAUNCH_BEGIN` → window-visible log events. The web
@@ -68,6 +68,8 @@ home screen and 136 MB for the web app plus 59 MB for its service
   Skip intro / recap / credits, next episode, audio / subtitles / quality menus, thumbs up or down, progress synced
   every 15 s, a spinner on rebuffering, and OK to resume where it was if the TV takes the decoder back (it does when a
   paused video sits under the screensaver).
+- **Quick to start:** the episode behind the focused play button (or card) is looked up ahead, so pressing OK goes
+  straight to asking for the stream; the episode's still fills the screen while it loads and fades into the video.
 - **Always the best stream:** the highest-bitrate 1080p rendition (Crunchyroll's maximum on TVs), shown on the TV's
   4K video plane, which upscales it in hardware.
 - **Light on the TV:** a frame is only drawn when something on it changed; at rest the GPU does nothing.
@@ -83,7 +85,7 @@ home screen and 136 MB for the web app plus 59 MB for its service
 
 ## Install
 
-1. Download `com.crunchyroll.webos.native_1.0.0_arm.ipk` from the
+1. Download `com.crunchyroll.webos.native_1.0.1_arm.ipk` from the
    [latest release](https://github.com/powky/crunchyroll-native-rust/releases/latest).
 2. Install it with one of:
    - [webOS Dev Manager](https://github.com/webosbrew/dev-manager-desktop) (Developer Mode or rooted): add the TV, then
@@ -91,11 +93,11 @@ home screen and 136 MB for the web app plus 59 MB for its service
    - The [webOS CLI](https://webostv.developer.lge.com/develop/tools/cli-installation) with Developer Mode:
      ```sh
      ares-setup-device                       # once: add the TV
-     ares-install --device <tv> com.crunchyroll.webos.native_1.0.0_arm.ipk
+     ares-install --device <tv> com.crunchyroll.webos.native_1.0.1_arm.ipk
      ```
    - A rooted TV over ssh:
      ```sh
-     scp com.crunchyroll.webos.native_1.0.0_arm.ipk root@<tv>:/tmp/crunchy.ipk
+     scp com.crunchyroll.webos.native_1.0.1_arm.ipk root@<tv>:/tmp/crunchy.ipk
      ssh root@<tv> "luna-send -n 1 luna://com.webos.appInstallService/dev/install '{\"id\":\"com.ares.defaultName\",\"ipkUrl\":\"/tmp/crunchy.ipk\",\"subscribe\":true}'"
      ```
 3. Open **Crunchy** from the launcher, go to **crunchyroll.com/activate** on a phone or computer and enter the code
