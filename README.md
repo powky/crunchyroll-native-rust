@@ -29,8 +29,8 @@ has four small ARM cores and about 700 MB of free memory. Crunchy replaces all o
 ## Performance
 
 Measured on the same TV (LG OLED55C1AUB, webOS 6.5.3, Mali-G51 MP3), with the same remote script — 20 presses
-along the home rows — against the community web app (an [Enact/React client](https://github.com/ediaz23/crunchyroll-webos-stream)
-running in LG's web engine):
+along the home rows — against a web client for the same TV ([Crunchyroll Stream](https://github.com/powky/crunchyroll-webos-stream),
+an Enact/React app running in LG's web engine):
 
 | | Crunchy (native) | Web app (LG web engine) |
 |---|---|---|
@@ -65,16 +65,17 @@ home screen and 136 MB for the web app plus 59 MB for its service
   star ratings, mark as watched, audio and subtitle languages, Similar and the show's music.
 - **Browse:** Simulcast by season, Series and Movies by genre, Music (videos, concerts, artists), My List, Search.
 - **Player:** Apple-TV-style controls, **seek thumbnails** while scrubbing (held arrows speed up to 90 s jumps),
-  Skip intro / recap / credits, next episode, audio / subtitles / quality menus, thumbs up or down, progress synced
-  every 15 s, a spinner on rebuffering, and OK to resume where it was if the TV takes the decoder back (it does when a
-  paused video sits under the screensaver).
+  Skip intro / recap / credits (on its own as the intro starts, for as long as Settings say, then with the controls),
+  next episode, audio / subtitles / quality menus, thumbs up or down, progress synced every 15 s, a spinner on
+  rebuffering, and OK to resume where it was if the TV takes the decoder back (it does when a paused video sits under
+  the screensaver).
 - **Quick to start:** the episode behind the focused play button (or card) is looked up ahead, so pressing OK goes
   straight to asking for the stream; the episode's still fills the screen while it loads and fades into the video.
 - **Always the best stream:** the highest-bitrate 1080p rendition (Crunchyroll's maximum on TVs), shown on the TV's
   4K video plane, which upscales it in hardware.
 - **Light on the TV:** a frame is only drawn when something on it changed; at rest the GPU does nothing.
-- The interface is in **Spanish** (Latin America); titles, descriptions, audio and subtitles follow your profile's
-  languages.
+- The interface speaks **the TV's language** — English, Spanish, Portuguese, French, German or Italian — or the one
+  picked in Settings; titles, descriptions, audio and subtitles follow your profile's languages.
 
 ## Requirements
 
@@ -82,6 +83,12 @@ home screen and 136 MB for the web app plus 59 MB for its service
 - **Developer Mode** or a **rooted TV with Homebrew Channel**, to install an IPK.
 - A **Crunchyroll account**; most of the catalog needs a premium plan. Each playback uses one of your plan's
   simultaneous streams and gives it back when the player closes.
+
+> [!IMPORTANT]
+> **We don't support piracy.** Crunchy is just another way to watch what your own Crunchyroll subscription already
+> includes. It signs in to your account, plays video through the TV's own Widevine DRM exactly like the official
+> apps, and keeps Crunchyroll's paywall, regions and stream limits. It doesn't bypass or weaken any of Crunchyroll's
+> protections, and it can't download, record or share anything. If you like a show, support it.
 
 ## Install
 
@@ -122,9 +129,10 @@ cargo run -p crunchy-tv     # simulator on macOS: arrows, Enter, Esc (no video)
 ./tools/push.sh             # dev loop: replace the installed binary and relaunch
 ```
 
-Icons: releases use Google's Material Icons (`assets/icons/open-icons.json`). A local build uses Apple's SF Symbols
-instead when `assets/icons/sf-symbols.json` exists (not in git: Apple's license keeps them out of distributed builds);
-`tools/release.sh` always builds without them.
+Icons: [Framework7 Icons](https://github.com/framework7io/framework7-icons) (MIT), drawn after Apple's SF Symbols
+(`assets/icons/open-icons.json`, written by `tools/open-icons.py`). On a Mac with Apple's SF Symbols extracted to
+`assets/icons/sf-symbols.json` (not in git: Apple's license keeps them out of distributed builds), `CRUNCHY_ICONS=sf`
+builds with those instead; `tools/release.sh` never does.
 
 ## How it works
 
@@ -157,14 +165,12 @@ official apps.
 
 - [crunchy-labs/crunchyroll-rs](https://github.com/crunchy-labs/crunchyroll-rs) — the Crunchyroll API library this app
   is built on (and the platform credentials it publishes).
-- [ediaz23/crunchyroll-webos-stream](https://github.com/ediaz23/crunchyroll-webos-stream) — the community web app whose
-  screens and behaviour this port follows.
 - [GLinnik21/plx-native](https://github.com/GLinnik21/plx-native) — the proof that a native player on webOS is possible,
   and the style of the tab bar.
 - [webosbrew](https://www.webosbrew.org) — the webOS Wayland protocol definitions, Homebrew Channel, Dev Manager and
   everything the community has documented.
-- [Inter](https://rsms.me/inter/) by Rasmus Andersson and [Material Icons](https://github.com/google/material-design-icons)
-  by Google. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+- [Inter](https://rsms.me/inter/) by Rasmus Andersson and [Framework7 Icons](https://github.com/framework7io/framework7-icons)
+  by Vladimir Kharlampidi. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## Disclaimer
 
