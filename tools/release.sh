@@ -1,6 +1,6 @@
 #!/bin/sh
 # The IPK a release ships: the open icon set only (never the local SF Symbols, whose license keeps them out of anything
-# distributed), at the version in pkg/appinfo.json, with the third-party notices beside the binary.
+# distributed), at the version in pkg/appinfo.json, with the license and the third-party notices beside the binary.
 set -e
 cd "$(dirname "$0")/.."
 # no paths of this machine in the binary (panic locations name their source files): dependencies' sources map to
@@ -12,7 +12,7 @@ if grep -a -q "M0 156.80C0 168.23" build/app/crunchy; then
 	echo "the release binary has SF Symbols in it" >&2
 	exit 1
 fi
-cp THIRD-PARTY-NOTICES.md build/app/
+cp LICENSE THIRD-PARTY-NOTICES.md build/app/
 # the license texts that go with the code and assets the binary carries, and every crate's license
 mkdir -p build/app/licenses
 cp vendor/crunchyroll-rs/LICENSE-MIT build/app/licenses/crunchyroll-rs-MIT.txt

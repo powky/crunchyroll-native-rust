@@ -174,8 +174,8 @@ You need your own Crunchyroll account, and use is subject to Crunchyroll's terms
 
 ## License
 
-No license has been chosen yet: until one is added, the author keeps all rights to this project's own code.
-Third-party components keep their own licenses ([THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)).
+[MIT](LICENSE) for this project's own code. Third-party components keep their own licenses
+([THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)).
 
 <sub>Keywords: Crunchyroll LG TV, Crunchyroll webOS, native webOS app, LG OLED anime, webOS homebrew, Rust webOS,
 OpenGL ES, Wayland.</sub>

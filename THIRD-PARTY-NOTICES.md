@@ -1,6 +1,6 @@
 # Third-party notices
 
-Crunchy for webOS includes or builds on the following work. Each keeps its own license.
+Crunchy for webOS is MIT-licensed (`LICENSE`). It includes or builds on the following work, each under its own license.
 
 | Component | Author | License | Where |
 |---|---|---|---|
