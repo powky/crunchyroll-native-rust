@@ -4,7 +4,7 @@ members = ["crates/core", "crates/player", "crates/tv"]
 
 [workspace.package]
 edition = "2024"
-version = "1.0.1"
+version = "1.0.2"
 license = "MIT"
 
 [profile.release]

@@ -92,7 +92,7 @@ home screen and 136 MB for the web app plus 59 MB for its service
 
 ## Install
 
-1. Download `com.crunchyroll.webos.native_1.0.1_arm.ipk` from the
+1. Download `com.crunchyroll.webos.native_1.0.2_arm.ipk` from the
    [latest release](https://github.com/powky/crunchyroll-native-rust/releases/latest).
 2. Install it with one of:
    - [webOS Dev Manager](https://github.com/webosbrew/dev-manager-desktop) (Developer Mode or rooted): add the TV, then
@@ -100,11 +100,11 @@ home screen and 136 MB for the web app plus 59 MB for its service
    - The [webOS CLI](https://webostv.developer.lge.com/develop/tools/cli-installation) with Developer Mode:
      ```sh
      ares-setup-device                       # once: add the TV
-     ares-install --device <tv> com.crunchyroll.webos.native_1.0.1_arm.ipk
+     ares-install --device <tv> com.crunchyroll.webos.native_1.0.2_arm.ipk
      ```
    - A rooted TV over ssh:
      ```sh
-     scp com.crunchyroll.webos.native_1.0.1_arm.ipk root@<tv>:/tmp/crunchy.ipk
+     scp com.crunchyroll.webos.native_1.0.2_arm.ipk root@<tv>:/tmp/crunchy.ipk
      ssh root@<tv> "luna-send -n 1 luna://com.webos.appInstallService/dev/install '{\"id\":\"com.ares.defaultName\",\"ipkUrl\":\"/tmp/crunchy.ipk\",\"subscribe\":true}'"
      ```
 3. Open **Crunchy** from the launcher, go to **crunchyroll.com/activate** on a phone or computer and enter the code
