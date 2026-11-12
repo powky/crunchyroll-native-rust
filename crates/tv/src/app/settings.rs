@@ -29,6 +29,8 @@ pub struct Settings {
     pub subtitles: String,
     /// seek thumbnails (for the player)
     pub previews: bool,
+    /// seconds "Saltar intro" (and the like) shows on its own; after them, it shows with the controls
+    pub skip_for: u32,
     /// "continue watching" first on the home, else second
     pub continue_first: bool,
     /// the lite interface drops Mi Lista's poster and genres
@@ -49,6 +51,7 @@ impl Default for Settings {
             video_quality: "adaptive".into(),
             subtitles: "hardsub".into(),
             previews: true,
+            skip_for: 10,
             continue_first: false,
             lite: false,
             clock_24h: true,
@@ -97,6 +100,7 @@ enum Row {
     Quality,
     Subtitles,
     Previews,
+    SkipFor,
     FirstRow,
     Interface,
     Clock,
@@ -114,6 +118,7 @@ impl Row {
             Row::Quality => "Calidad de vídeo",
             Row::Subtitles => "Subtítulos",
             Row::Previews => "Vistas previas",
+            Row::SkipFor => "Mostrar «Saltar intro»",
             Row::FirstRow => "Primera fila",
             Row::Interface => "Interfaz",
             Row::Clock => "Reloj",
@@ -131,6 +136,7 @@ impl Row {
             Row::Quality => Icon::Tv,
             Row::Subtitles | Row::SubtitleLanguage => Icon::Bubble,
             Row::Previews => Icon::Photo,
+            Row::SkipFor => Icon::Skip,
             Row::FirstRow => Icon::Rows,
             Row::Interface => Icon::Sparkles,
             Row::Clock => Icon::Clock,
@@ -151,7 +157,7 @@ const CONTENT_LANGUAGES: [&str; 11] =
 
 fn sections() -> Vec<(&'static str, Vec<Row>)> {
     vec![
-        ("REPRODUCCIÓN", vec![Row::Quality, Row::Subtitles, Row::Previews]),
+        ("REPRODUCCIÓN", vec![Row::Quality, Row::Subtitles, Row::Previews, Row::SkipFor]),
         ("INICIO", vec![Row::FirstRow, Row::Interface, Row::Clock]),
         ("PANTALLA", vec![Row::Resolution]),
         (
@@ -178,6 +184,7 @@ fn options(row: Row, state: &State) -> Vec<(String, String)> {
         ]),
         Row::Subtitles => pairs(&[("hardsub", "Incrustados en el vídeo (Hardsub)"), ("softsub", "Dibujados por la app (Softsub)")]),
         Row::Previews => pairs(&[("yes", "Sí"), ("no", "No")]),
+        Row::SkipFor => pairs(&[("5", "5 segundos"), ("10", "10 segundos"), ("15", "15 segundos"), ("30", "30 segundos")]),
         Row::FirstRow => pairs(&[("suggestions", "Sugerencias"), ("continue", "Seguir viendo")]),
         Row::Interface => pairs(&[("full", "Completo"), ("lite", "Ligero")]),
         Row::Clock => pairs(&[("24", "24 horas"), ("12", "12 horas (a. m. / p. m.)")]),
@@ -210,6 +217,7 @@ fn value(row: Row, state: &State) -> Option<String> {
         Row::Quality => s.video_quality.clone(),
         Row::Subtitles => s.subtitles.clone(),
         Row::Previews => if s.previews { "yes" } else { "no" }.into(),
+        Row::SkipFor => s.skip_for.to_string(),
         Row::FirstRow => if s.continue_first { "continue" } else { "suggestions" }.into(),
         Row::Interface => if s.lite { "lite" } else { "full" }.into(),
         Row::Clock => if s.clock_24h { "24" } else { "12" }.into(),
@@ -262,6 +270,7 @@ impl SettingsPage {
             Row::Quality => s.video_quality = chosen.into(),
             Row::Subtitles => s.subtitles = chosen.into(),
             Row::Previews => s.previews = chosen == "yes",
+            Row::SkipFor => s.skip_for = chosen.parse().unwrap_or(10),
             Row::FirstRow => s.continue_first = chosen == "continue",
             Row::Interface => s.lite = chosen == "lite",
             Row::Clock => s.clock_24h = chosen == "24",

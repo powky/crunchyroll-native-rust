@@ -4,9 +4,10 @@
 //! next one in the middle; subtitles, audio and quality on the right, each with its menu above it. A button's name
 //! shows under it once the focus rests there. With the controls hidden, left and right jump (5, 10, 20, then 30
 //! seconds a press in a row); on the bar they move the knob; either way the video goes there once the arrows rest.
-//! "Saltar intro" (and the recap, credits and preview) shows, focused, where Crunchyroll marked them; over the
-//! credits and the preview it's "Siguiente episodio" when there's one, and "Terminar" after the last. Where the video
-//! was left is saved every 15 seconds and on the way out, and at the end the next episode plays.
+//! "Saltar intro" (and the recap, credits and preview) comes up on its own, focused, where Crunchyroll marked them,
+//! for the seconds Settings say, and after them shows with the controls until that part ends; over the credits and
+//! the preview it's "Siguiente episodio" when there's one, and "Terminar" after the last, through the whole of them.
+//! Where the video was left is saved every 15 seconds and on the way out, and at the end the next episode plays.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -47,8 +48,6 @@ const NEXT_AFTER: Duration = Duration::from_secs(2);
 const NAME_AFTER: Duration = Duration::from_millis(1200);
 /// "Previous" restarts the episode after this much of it, and goes to the one before only earlier.
 const RESTART_AFTER: Duration = Duration::from_secs(30);
-/// A skip button shows at most this many seconds from the start of what it skips.
-const SKIP_FOR: f32 = 15.0;
 
 // Moonstone's layout at 1080p (1rem = 24 px): the controls 2.5rem from the sides and 1.25rem from the bottom.
 const SIDE: f32 = 60.0;
@@ -162,6 +161,8 @@ pub struct PlayerPage {
     shown: f32,
     /// the last key
     activity: Instant,
+    /// the last key the remote pressed (none yet: `activity` also counts the video arriving)
+    last_key: Option<Instant>,
     focus: Focus,
     focus_at: Instant,
     /// the button the focus goes back to from the bar
@@ -175,8 +176,14 @@ pub struct PlayerPage {
     skips: Vec<SkipEvent>,
     skips_for: String,
     skip_active: Option<usize>,
-    /// a skip button Back or a skip put away
+    /// the part skipped last: its button doesn't come back until the video is past it
     skip_dismissed: Option<usize>,
+    /// when the skip button came up on its own: it stays `skip_for` seconds (over the end, all of it) unless Back
+    /// puts it away, and the controls show it the whole time
+    skip_alone: Option<Instant>,
+    skip_for: f32,
+    /// how far the skip button has faded in
+    skip_shown: f32,
     /// the profile's thumb on the episode: "up", "down" or none
     rating: Option<String>,
     saved_at: Instant,
@@ -224,6 +231,7 @@ impl PlayerPage {
             controls: true,
             shown: 0.0,
             activity: now,
+            last_key: None,
             focus: Focus::Button(Control::PlayPause),
             focus_at: now,
             last_button: Control::PlayPause,
@@ -235,6 +243,9 @@ impl PlayerPage {
             skips_for: String::new(),
             skip_active: None,
             skip_dismissed: None,
+            skip_alone: None,
+            skip_for: 10.0,
+            skip_shown: 0.0,
             rating: None,
             saved_at: now,
             ended_at: None,
@@ -301,6 +312,7 @@ impl PlayerPage {
         self.ended_at = None;
         self.menu = None;
         self.skip_active = None;
+        self.skip_alone = None;
         platform::want_video_window(true);
         if self.demo {
             #[cfg(not(target_os = "linux"))]
@@ -571,9 +583,16 @@ impl PlayerPage {
             self.jump = None;
         }
         self.skip_dismissed = self.skip_active;
+        self.skip_alone = None;
         self.controls = false;
         self.set_focus(Focus::Button(Control::PlayPause));
         Nav::Stay
+    }
+
+    /// Whether the skip button shows without the controls: for its first `skip_for` seconds, or all of the end.
+    fn skip_alone_shows(&self) -> bool {
+        let Some(event) = self.skip_active.and_then(|index| self.skips.get(index)) else { return false };
+        self.skip_alone.is_some_and(|at| Self::ending(event) || at.elapsed().as_secs_f32() < self.skip_for)
     }
 
     fn activate(&mut self, control: Control, playback: &Playback, env: &mut Env) {
@@ -830,7 +849,7 @@ impl PlayerPage {
         ui.gfx.text(Font::Bold, 34.0, r.x + 18.0 + 34.0 + 12.0, r.y + 9.0, &label, TEXT, None);
     }
 
-    fn draw_skip(&self, ui: &mut Ui, event: &SkipEvent) {
+    fn draw_skip(&self, ui: &mut Ui, event: &SkipEvent, k: f32) {
         let (label, icon) = self.skip_look(event);
         let w = 44.0 + 32.0 + 14.0 + ui.gfx.measure(Font::Bold, 30.0, label) + 44.0;
         // over the bottom edge, or above the title while the controls show
@@ -842,14 +861,14 @@ impl PlayerPage {
         let r = if focused { r.scaled(1.08) } else { r };
         // a soft shadow under it
         for (grow, drop, alpha) in [(6.0, 10.0, 0.08), (3.0, 6.0, 0.10), (0.0, 3.0, 0.12)] {
-            ui.gfx.rect(Rect::new(r.x - grow, r.y + drop - grow, r.w + 2.0 * grow, r.h + 2.0 * grow), r.h / 2.0 + grow, Color(0.0, 0.0, 0.0, alpha));
+            ui.gfx.rect(Rect::new(r.x - grow, r.y + drop - grow, r.w + 2.0 * grow, r.h + 2.0 * grow), r.h / 2.0 + grow, Color(0.0, 0.0, 0.0, alpha * k));
         }
-        ui.gfx.rect(r, r.h / 2.0, if focused { Color(1.0, 1.0, 1.0, 1.0) } else { Color(0.96, 0.96, 0.97, 0.92) });
+        ui.gfx.rect(r, r.h / 2.0, if focused { Color(1.0, 1.0, 1.0, 1.0) } else { Color(0.96, 0.96, 0.97, 0.92) }.alpha(k));
         let size = if focused { 32.0 * 1.08 } else { 32.0 };
         let text_size = if focused { 30.0 * 1.08 } else { 30.0 };
         let x = r.x + r.h * 0.52;
-        ui.gfx.icon(icon, x, r.y + (r.h - size) / 2.0, size, BG);
-        ui.gfx.text(Font::Bold, text_size, x + size + 14.0, r.y + r.h / 2.0 - text_size * 0.62, label, BG, None);
+        ui.gfx.icon(icon, x, r.y + (r.h - size) / 2.0, size, BG.alpha(k));
+        ui.gfx.text(Font::Bold, text_size, x + size + 14.0, r.y + r.h / 2.0 - text_size * 0.62, label, BG.alpha(k), None);
     }
 
     fn draw_menu(&self, ui: &mut Ui, menu: &Menu) {
@@ -956,6 +975,7 @@ impl Page for PlayerPage {
             self.send(env.worker, Command::Languages);
         }
         self.previews = env.state.settings.previews;
+        self.skip_for = env.state.settings.skip_for as f32;
         let profile = env.state.account.profile();
         self.wanted.audio = env.state.account.audio();
         self.wanted.subtitles = profile.map(|profile| profile.subtitle_language.clone()).filter(|s| !s.is_empty());
@@ -1011,6 +1031,7 @@ impl Page for PlayerPage {
 
     fn key(&mut self, key: Key, env: &mut Env) -> Nav {
         self.activity = Instant::now();
+        self.last_key = Some(self.activity);
         if self.info {
             if matches!(key, Key::Back | Key::Ok) {
                 self.info = false;
@@ -1052,11 +1073,17 @@ impl Page for PlayerPage {
         if self.focus == Focus::Skip {
             match key {
                 Key::Ok => return self.skip(env.worker, &playback),
+                // put away: from then on it only shows with the controls
                 Key::Back => {
-                    self.skip_dismissed = self.skip_active;
+                    self.skip_alone = None;
+                    self.controls = false;
                     self.set_focus(Focus::Button(self.last_button));
                 }
                 Key::Up => {}
+                Key::Down => {
+                    self.show_controls();
+                    self.set_focus(Focus::Bar);
+                }
                 _ => {
                     self.set_focus(Focus::Button(self.last_button));
                     self.show_controls();
@@ -1164,22 +1191,28 @@ impl Page for PlayerPage {
             }
         }
 
-        // a skip button, focused when it comes up
+        // a skip button through the whole of what it skips: on its own when that starts, with the controls after
         let at = status.position.as_secs_f32();
+        if let Some(event) = self.skip_dismissed.and_then(|index| self.skips.get(index))
+            && at >= event.end
+        {
+            self.skip_dismissed = None;
+        }
         let active = self
             .skips
             .iter()
-            .position(|event| {
-                // the next episode is offered through the whole of the credits; a skip, its first seconds
-                let lasts = if Self::ending(event) { event.end - event.start } else { SKIP_FOR.min(event.end - event.start) };
-                at > 0.0 && event.start <= at && at <= event.start + lasts
-            })
+            .position(|event| at > 0.0 && event.start <= at && at < event.end)
             .filter(|index| Some(*index) != self.skip_dismissed);
         if active != self.skip_active {
-            // it takes the focus, unless a menu, the sheet or the bar is in use
-            if active.is_some() && self.menu.is_none() && !self.info && self.jump.is_none() {
+            self.skip_alone = active.map(|_| Instant::now());
+            // coming up, it takes over from controls nobody is using (they show as the video starts)
+            if active.is_some()
+                && self.menu.is_none()
+                && !self.info
+                && self.jump.is_none()
+                && !self.last_key.is_some_and(|at| at.elapsed() < HIDE_AFTER)
+            {
                 self.controls = false;
-                self.set_focus(Focus::Skip);
             } else if active.is_none() && self.focus == Focus::Skip {
                 self.set_focus(Focus::Button(self.last_button));
             }
@@ -1188,6 +1221,20 @@ impl Page for PlayerPage {
 
         if self.controls && !paused && self.menu.is_none() && self.jump.is_none() && self.activity.elapsed() >= HIDE_AFTER {
             self.controls = false;
+        }
+        // on its own it has the focus (unless a menu, the sheet or the arrows are in use); put away, it gives it back
+        let alone = self.skip_alone_shows();
+        if !self.controls && self.menu.is_none() && !self.info && self.jump.is_none() {
+            if alone && self.focus != Focus::Skip {
+                self.set_focus(Focus::Skip);
+            } else if !alone && self.focus == Focus::Skip {
+                self.set_focus(Focus::Button(self.last_button));
+            }
+        }
+        let target = if self.skip_active.is_some() && !self.info && (alone || self.controls) { 1.0 } else { 0.0 };
+        self.skip_shown += (target - self.skip_shown) * (1.0 - (-ui.dt * 9.0).exp());
+        if (target - self.skip_shown).abs() < 0.01 {
+            self.skip_shown = target;
         }
         // the information sheet covers them
         let target = if self.controls && !self.info { 1.0 } else { 0.0 };
@@ -1230,8 +1277,8 @@ impl Page for PlayerPage {
         {
             self.draw_jump(ui, forward);
         }
-        if let Some(event) = self.skip_active.and_then(|index| self.skips.get(index)).filter(|_| !self.info) {
-            self.draw_skip(ui, event);
+        if let Some(event) = self.skip_active.and_then(|index| self.skips.get(index)).filter(|_| self.skip_shown > 0.0) {
+            self.draw_skip(ui, event, self.skip_shown);
         }
         if let Some(menu) = &self.menu {
             self.draw_menu(ui, menu);
