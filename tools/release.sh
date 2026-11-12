@@ -17,7 +17,7 @@ cp LICENSE THIRD-PARTY-NOTICES.md build/app/
 mkdir -p build/app/licenses
 cp vendor/crunchyroll-rs/LICENSE-MIT build/app/licenses/crunchyroll-rs-MIT.txt
 cp vendor/crunchyroll-rs/LICENSE-APACHE build/app/licenses/crunchyroll-rs-Apache-2.0.txt
-cp assets/icons/LICENSE-material-icons.txt build/app/licenses/material-icons-Apache-2.0.txt
+cp assets/icons/LICENSE-framework7-icons.txt build/app/licenses/framework7-icons-MIT.txt
 cp assets/fonts/Inter-OFL.txt build/app/licenses/inter-OFL.txt
 export PATH="/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:$PATH"
 # (the app's own crates out, and no local paths: "crunchyroll-rs v0.19.1 (/…/vendor/crunchyroll-rs)")

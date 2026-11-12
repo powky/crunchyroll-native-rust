@@ -1,12 +1,12 @@
 //! Icons and the Crunchyroll logo: SVG path data rasterised by tiny-skia into the text atlas the first time each is
-//! drawn at a size, then tinted like text. The icons are Apple's SF Symbols as the web app generates them
-//! (`assets/icons/sf-symbols.json`, local only: not in git) where that file is, else Google's Material Icons Round
-//! (`assets/icons/open-icons.json`, Apache-2.0); see build.rs.
+//! drawn at a size, then tinted like text. The icons are Framework7 Icons (`assets/icons/open-icons.json`, MIT),
+//! drawn after Apple's SF Symbols, or the SF Symbols themselves as the web app generates them
+//! (`assets/icons/sf-symbols.json`, local only: not in git) in a build that asks for them; see build.rs.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Transform};
+use tiny_skia::{FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Icon {
@@ -117,10 +117,14 @@ const LOGO_SVG: &str = include_str!("../../../../assets/icons/crunchyroll-logo.s
 struct Glyph {
     w: f32,
     h: f32,
-    /// the glyph's units per box unit (the SF Symbols are drawn in the box's own units; Material's 24-unit icons are
-    /// scaled up to about an SF symbol's size)
+    /// the glyph's units per box unit (the SF Symbols are drawn in the box's own units; Framework7's 56-unit box is
+    /// scaled up to the whole box)
     s: f32,
     d: String,
+    /// filled even-odd rather than nonzero
+    even_odd: bool,
+    /// a stroke this wide (in the glyph's units) around the outline, to make a line icon bolder
+    bold: f32,
 }
 
 fn glyphs() -> &'static HashMap<String, Glyph> {
@@ -134,7 +138,9 @@ fn glyphs() -> &'static HashMap<String, Glyph> {
                 let number = |key: &str| glyph.get(key).and_then(|v| v.as_f64()).map(|v| v as f32);
                 if let Some(d) = glyph.get("d").and_then(|d| d.as_str()) {
                     let (w, h, s) = (number("w").unwrap_or(0.0), number("h").unwrap_or(0.0), number("s").unwrap_or(1.0));
-                    out.insert(name.clone(), Glyph { w, h, s, d: d.to_string() });
+                    let even_odd = glyph.get("e").and_then(|e| e.as_bool()).unwrap_or(false);
+                    let bold = number("b").unwrap_or(0.0);
+                    out.insert(name.clone(), Glyph { w, h, s, d: d.to_string(), even_odd, bold });
                 }
             }
         }
@@ -145,10 +151,10 @@ fn glyphs() -> &'static HashMap<String, Glyph> {
 /// Coverage (one byte a pixel) for an icon `height` pixels tall, and its width.
 pub fn rasterize(icon: Icon, height: u32) -> Option<(u32, u32, Vec<u8>)> {
     let height = height.max(1);
-    let (width, d, transform) = if icon == Icon::Logo {
+    let (width, d, transform, rule, bold) = if icon == Icon::Logo {
         let scale = height as f32 / LOGO_H;
         let d = LOGO_SVG.split(" d=\"").nth(1)?.split('"').next()?;
-        ((LOGO_W * scale).ceil() as u32, d, Transform::from_scale(scale, scale))
+        ((LOGO_W * scale).ceil() as u32, d, Transform::from_scale(scale, scale), FillRule::Winding, 0.0)
     } else {
         let glyph = glyphs().get(icon.glyph_name())?;
         let scale = height as f32 / SF_BOX;
@@ -160,14 +166,19 @@ pub fn rasterize(icon: Icon, height: u32) -> Option<(u32, u32, Vec<u8>)> {
             (SF_BOX - glyph.w * glyph.s) / 2.0 * scale,
             (SF_BOX - glyph.h * glyph.s) / 2.0 * scale,
         );
-        (height, glyph.d.as_str(), transform)
+        let rule = if glyph.even_odd { FillRule::EvenOdd } else { FillRule::Winding };
+        (height, glyph.d.as_str(), transform, rule, glyph.bold)
     };
     let path = parse_path(d)?;
     let mut pixmap = Pixmap::new(width, height)?;
     let mut paint = Paint::default();
     paint.set_color_rgba8(255, 255, 255, 255);
     paint.anti_alias = true;
-    pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+    pixmap.fill_path(&path, &paint, rule, transform, None);
+    if bold > 0.0 {
+        let stroke = Stroke { width: bold, line_join: LineJoin::Round, line_cap: LineCap::Round, ..Stroke::default() };
+        pixmap.stroke_path(&path, &paint, &stroke, transform, None);
+    }
     let coverage = pixmap.data().chunks_exact(4).map(|pixel| pixel[3]).collect();
     Some((width, height, coverage))
 }
