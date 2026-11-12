@@ -104,6 +104,18 @@ pub fn data_dir() -> PathBuf {
     std::env::temp_dir()
 }
 
+/// The language the TV's menus are in ("en-US"): `localeInfo.locales.UI` of its preferences, which the app's jail can
+/// read. The simulator has no such file and takes `CRUNCHY_LANG` ("en", "pt-BR") instead.
+pub fn ui_locale() -> Option<String> {
+    if cfg!(target_os = "linux") {
+        let bytes = std::fs::read("/var/luna/preferences/localeInfo").ok()?;
+        let info: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        info.pointer("/localeInfo/locales/UI")?.as_str().map(String::from)
+    } else {
+        std::env::var("CRUNCHY_LANG").ok()
+    }
+}
+
 /// On the TV nothing reads stderr: send it to `crunchy.log` in the data folder (the previous run's kept as `.1`).
 pub fn log_to_file(dir: &std::path::Path) {
     #[cfg(target_os = "linux")]

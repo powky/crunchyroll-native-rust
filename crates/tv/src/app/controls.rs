@@ -6,12 +6,13 @@ use std::time::{Duration, Instant};
 use crate::gfx::{Color, Font, Icon, Rect};
 use crate::platform::Key;
 
+use super::i18n::{Text, t};
 use super::keyboard::{self, Keyboard, Outcome};
 use super::theme::*;
 use super::ui::{Look, Ui};
 
 pub struct Dropdown {
-    pub options: Vec<String>,
+    pub options: Vec<Text>,
     pub selected: usize,
     /// open, with the option focused
     pub open: Option<usize>,
@@ -30,8 +31,8 @@ pub enum DropNav {
 const DROP_H: f32 = 60.0;
 
 impl Dropdown {
-    pub fn new(options: &[&str], selected: usize, width: f32) -> Dropdown {
-        Dropdown { options: options.iter().map(|s| s.to_string()).collect(), selected, open: None, width }
+    pub fn new(options: Vec<Text>, selected: usize, width: f32) -> Dropdown {
+        Dropdown { options, selected, open: None, width }
     }
 
     pub fn key(&mut self, key: Key) -> DropNav {
@@ -67,8 +68,8 @@ impl Dropdown {
             ui.gfx.rect(r.inset(-2.0), DROP_H / 2.0 + 2.0, TEXT);
             ui.gfx.rect(r, DROP_H / 2.0, Color::rgb(0x2c2c31));
         }
-        let label = self.options.get(self.selected).map(String::as_str).unwrap_or("");
-        ui.gfx.text(Font::SemiBold, 28.0, r.x + 24.0, r.y + 13.0, label, ink, Some(r.w - 80.0));
+        let label = self.options.get(self.selected).map(Text::get).unwrap_or_default();
+        ui.gfx.text(Font::SemiBold, 28.0, r.x + 24.0, r.y + 13.0, &label, ink, Some(r.w - 80.0));
         let icon = if self.open.is_some() { Icon::ChevronDown } else { Icon::ChevronDown };
         ui.gfx.icon(icon, r.x + r.w - 24.0 - 24.0, r.y + 18.0, 24.0, ink);
     }
@@ -87,7 +88,7 @@ impl Dropdown {
                 ui.gfx.rect(r, 14.0, TEXT);
             }
             let ink = if focused { BG } else { TEXT };
-            ui.gfx.text(Font::Regular, 27.0, r.x + 18.0, r.y + 12.0, option, ink, Some(r.w - 70.0));
+            ui.gfx.text(Font::Regular, 27.0, r.x + 18.0, r.y + 12.0, &option.get(), ink, Some(r.w - 70.0));
             if index == self.selected {
                 ui.gfx.icon(Icon::Check, r.x + r.w - 44.0, r.y + 16.0, 24.0, ink);
             }
@@ -185,7 +186,7 @@ impl SearchField {
         ui.gfx.icon(Icon::Search, r.x + 24.0, r.y + 20.0, 24.0, if active { hint } else { MUTED });
         let text_x = r.x + 64.0;
         if self.text.is_empty() {
-            ui.gfx.text(Font::Regular, 26.0, text_x, r.y + 17.0, "Buscar", hint, None);
+            ui.gfx.text(Font::Regular, 26.0, text_x, r.y + 17.0, t("Search"), hint, None);
         } else {
             let w = ui.gfx.text(Font::Regular, 26.0, text_x, r.y + 17.0, &self.text, ink, Some(r.w - 90.0));
             if self.keyboard.is_some() && (ui.t * 2.0) as i32 % 2 == 0 {
@@ -205,23 +206,24 @@ impl SearchField {
 
 /// A row of pills (categories) that slides so the focused one stays clear of the faded edges.
 pub struct PillRow {
-    pub labels: Vec<String>,
+    pub labels: Vec<Text>,
     pub selected: usize,
     pub focus: usize,
     scroll: f32,
 }
 
 impl PillRow {
-    pub fn new(labels: Vec<String>) -> PillRow {
+    pub fn new(labels: Vec<Text>) -> PillRow {
         PillRow { labels, selected: 0, focus: 0, scroll: 0.0 }
     }
 
     pub fn draw(&mut self, ui: &mut Ui, x: f32, y: f32, w: f32, focused: bool) {
         let h = 48.0;
+        let labels: Vec<_> = self.labels.iter().map(Text::get).collect();
         // where each pill sits along the strip
-        let mut starts = Vec::with_capacity(self.labels.len());
+        let mut starts = Vec::with_capacity(labels.len());
         let mut at = 0.0;
-        for label in &self.labels {
+        for label in &labels {
             starts.push(at);
             at += ui.gfx.measure(Font::SemiBold, 22.0, label) + 44.0 + 6.0;
         }
@@ -239,7 +241,7 @@ impl PillRow {
             self.scroll = approach(self.scroll, target, ui.dt, 14.0);
         }
         ui.gfx.clip(Some(Rect::new(x, y - 8.0, w, h + 16.0)));
-        for (index, label) in self.labels.iter().enumerate() {
+        for (index, label) in labels.iter().enumerate() {
             let px = x + starts[index] - self.scroll;
             if px > x + w || px + 400.0 < x {
                 continue;

@@ -1,6 +1,7 @@
 //! The simulator: a 960x540 window (1920x1080 pixels on a Retina screen) with desktop OpenGL, arrow keys, Enter
 //! and Escape/Backspace for Back. `CRUNCHY_SHOT=<file.png>` saves frame `CRUNCHY_SHOT_FRAME` (default 90) and quits.
 //! `CRUNCHY_KEYS=ok,right,w60,down` presses keys on its own, one every 12 frames from frame 30 (`wN` waits N frames).
+//! `CRUNCHY_LANG=en` (or es, pt, fr, de, it) stands in for the TV's menu language.
 
 use std::collections::VecDeque;
 use std::num::NonZeroU32;

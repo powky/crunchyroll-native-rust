@@ -1,5 +1,5 @@
 //! Editing a profile, or creating one: its avatar (picked from Crunchyroll's albums), name, username (for a new
-//! one), and its three languages; then Guardar, or Eliminar for a profile that isn't the account's own.
+//! one), and its three languages; then Save, or Delete for a profile that isn't the account's own.
 
 use crunchy_core::account::{Album, Profile, avatar_url};
 use serde_json::{Map, Value, json};
@@ -8,6 +8,7 @@ use crate::gfx::{Color, Font, Icon, Rect};
 use crate::platform::Key;
 
 use super::alert::{Alert, AlertAction};
+use super::i18n::{Text, t};
 use super::keyboard::{self, Keyboard, Outcome};
 use super::languages::language_name;
 use super::signin::AVATAR_PICTURE;
@@ -34,14 +35,14 @@ enum Row {
 impl Row {
     fn label(self) -> &'static str {
         match self {
-            Row::Avatar => "Avatar",
-            Row::Name => "Nombre",
-            Row::Username => "Nombre de usuario",
-            Row::Content => "Idioma del contenido",
-            Row::Audio => "Idioma de audio",
-            Row::Subtitles => "Idioma de subtítulos",
-            Row::Save => "Guardar",
-            Row::Delete => "Eliminar",
+            Row::Avatar => t("Avatar"),
+            Row::Name => t("Name"),
+            Row::Username => t("Username"),
+            Row::Content => t("Content language"),
+            Row::Audio => t("Audio language"),
+            Row::Subtitles => t("Subtitle language"),
+            Row::Save => t("Save"),
+            Row::Delete => t("Delete"),
         }
     }
 
@@ -135,7 +136,7 @@ impl ProfileEdit {
                 list
             }
             Row::Subtitles => {
-                let mut list = vec![("off".to_string(), "Desactivar".to_string())];
+                let mut list = vec![("off".to_string(), t("None").to_string())];
                 if let Some((_, subtitles)) = &state.account.languages {
                     list.extend(subtitles.iter().map(|(c, _)| (c.clone(), language_name(c))));
                 }
@@ -161,7 +162,7 @@ impl ProfileEdit {
         let name = self.profile.name.trim().to_string();
         let valid = (2..=50).contains(&name.chars().count()) && name.chars().all(|c| c.is_ascii_alphanumeric());
         if !valid {
-            return Nav::Toast("Sólo se acepta números y letras, al menos 2 caracteres.".into());
+            return Nav::Toast(Text::Key("Only letters and numbers, at least 2 characters."));
         }
         let p = &self.profile;
         let subtitles = if p.subtitle_language == "off" { Value::Null } else { json!(p.subtitle_language) };
@@ -194,7 +195,7 @@ impl ProfileEdit {
             }
             None => {
                 if p.avatar.is_empty() || p.username.is_empty() {
-                    return Nav::Toast("Elige un avatar y un nombre de usuario.".into());
+                    return Nav::Toast(Text::Key("Choose an avatar and a username."));
                 }
                 for (key, value) in all {
                     fields.insert(key.into(), value);
@@ -347,8 +348,8 @@ impl Page for ProfileEdit {
                 Row::Delete => {
                     if let Some(original) = &self.original {
                         return Nav::Alert(Alert::new(
-                            "Eliminar Perfil",
-                            Some("¿Estás seguro de que deseas eliminar este perfil?"),
+                            Text::Key("Delete Profile"),
+                            Some(Text::Key("Are you sure you want to delete this profile?")),
                             AlertAction::DeleteProfile(original.id.clone()),
                         ));
                     }
@@ -376,11 +377,11 @@ impl Page for ProfileEdit {
             return;
         }
         // side column: the avatar and the name
-        let title = if self.original.is_some() { "Perfil" } else { "Nuevo perfil" };
+        let title = if self.original.is_some() { t("Profile") } else { t("New profile") };
         ui.text_centered(Font::Bold, 56.0, 358.0, 220.0, title, TEXT);
         let avatar = Rect::new(358.0 - 150.0, 330.0, 300.0, 300.0);
         ui.picture(avatar_url(&self.profile.avatar).as_deref(), avatar, 150.0, 1.0, AVATAR_PICTURE);
-        let name = if self.profile.name.is_empty() { "Sin nombre" } else { &self.profile.name };
+        let name = if self.profile.name.is_empty() { t("No name") } else { &self.profile.name };
         ui.text_centered(Font::SemiBold, 34.0, 358.0, 670.0, name, TEXT);
 
         let rows = self.rows();
@@ -424,7 +425,7 @@ impl Page for ProfileEdit {
                 let ink = if look.focused { BG } else if *row == Row::Delete { Color::rgb(0xff6b5e) } else { TEXT };
                 let soft = if look.focused { Color(0.043, 0.043, 0.055, 0.62) } else { MUTED };
                 ui.gfx.icon(row.icon(), r.x + 26.0, r.y + 24.0, 28.0, ink);
-                let label = if *row == Row::Save && self.saving { "Guardando…" } else { row.label() };
+                let label = if *row == Row::Save && self.saving { t("Saving…") } else { row.label() };
                 ui.gfx.text(Font::Regular, 25.0, r.x + 72.0, r.y + 23.0, label, ink, Some(r.w - 600.0));
                 if !action {
                     let editable = !(*row == Row::Username && self.original.is_some());
@@ -451,7 +452,7 @@ impl Page for ProfileEdit {
 }
 
 fn draw_picker(ui: &mut Ui, albums: &[Album], picker: &mut Picker, current: &str) {
-    ui.gfx.text(Font::Bold, 44.0, PAD, 48.0, "Elige un avatar", TEXT, None);
+    ui.gfx.text(Font::Bold, 44.0, PAD, 48.0, t("Choose an avatar"), TEXT, None);
     // album pills
     let mut x = PAD;
     for (index, album) in albums.iter().enumerate() {
@@ -462,7 +463,7 @@ fn draw_picker(ui: &mut Ui, albums: &[Album], picker: &mut Picker, current: &str
         x += ui.pill_plain(x, 120.0, 48.0, &album.title, None, 22.0, look) + 6.0;
     }
     let Some(album) = albums.get(picker.album) else {
-        ui.text_centered(Font::SemiBold, 28.0, 960.0, 400.0, "Cargando…", DIM);
+        ui.text_centered(Font::SemiBold, 28.0, 960.0, 400.0, t("Loading…"), DIM);
         return;
     };
     let cols = 8;

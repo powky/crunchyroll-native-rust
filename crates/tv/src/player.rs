@@ -184,7 +184,8 @@ impl Drop for Release {
 
 #[cfg(not(target_os = "linux"))]
 pub async fn open(_: &Crunchyroll, _: &str, _: &Wanted) -> Result<Playback> {
-    anyhow::bail!("Los videos se reproducen en la TV")
+    // a key of the interface's table: the screen says it in its language
+    anyhow::bail!(crate::app::i18n::Text::Key("Videos play on the TV"))
 }
 
 #[cfg(not(target_os = "linux"))]

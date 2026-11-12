@@ -6,6 +6,7 @@ use crate::gfx::{Font, Rect};
 use crate::platform::Key;
 
 use super::feed::DETAIL_SHADE;
+use super::i18n::t;
 use super::show::NO_PLAYER;
 use super::theme::*;
 use super::ui::{Backdrop, HeroSize, HeroView, Look, Ui, row_scroll};
@@ -43,10 +44,10 @@ impl ArtistPage {
         let Some((videos, concerts)) = &self.lists else { return Vec::new() };
         let mut tabs = Vec::new();
         if !videos.is_empty() {
-            tabs.push((0, "Vídeos"));
+            tabs.push((0, t("Videos")));
         }
         if !concerts.is_empty() {
-            tabs.push((1, "Conciertos"));
+            tabs.push((1, t("Concerts")));
         }
         tabs
     }
@@ -103,7 +104,7 @@ impl Page for ArtistPage {
                 Key::Left => self.focus = self.focus.saturating_sub(1),
                 Key::Right => self.focus = (self.focus + 1).min(self.list().len().saturating_sub(1)),
                 Key::Up if !tabs.is_empty() => self.zone = Zone::Tabs,
-                Key::Ok => return Nav::Toast(NO_PLAYER.into()),
+                Key::Ok => return Nav::Toast(NO_PLAYER),
                 Key::Back => return Nav::Back,
                 _ => {}
             },
@@ -135,7 +136,7 @@ impl Page for ArtistPage {
         }
         let list = self.list().to_vec();
         if list.is_empty() {
-            ui.text_centered(Font::SemiBold, 28.0, 960.0, cards_y + 80.0, "Vacío", DIM);
+            ui.text_centered(Font::SemiBold, 28.0, 960.0, cards_y + 80.0, t("Empty"), DIM);
             return;
         }
         self.focus = self.focus.min(list.len() - 1);

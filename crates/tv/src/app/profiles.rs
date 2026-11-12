@@ -1,10 +1,11 @@
-//! "¿Quién se irá de aventura?": the account's profiles, each with a pencil to edit it, Agregar when the plan has
-//! room, and in the corner Ajustes and Cerrar Sesión. Back asks before leaving the app.
+//! "Who's going on an adventure?": the account's profiles, each with a pencil to edit it, Add when the plan has
+//! room, and in the corner Settings and Sign Out. Back asks before leaving the app.
 
 use crate::gfx::{Color, Font, Icon, Rect};
 use crate::platform::Key;
 
 use super::alert::{Alert, AlertAction};
+use super::i18n::{Text, t};
 use super::signin::AVATAR_PICTURE;
 use super::theme::*;
 use super::ui::{Look, Ui};
@@ -48,7 +49,7 @@ impl ProfilesScreen {
             (Focus::Pencil(_), Key::Down) if can_add => Focus::Add,
             (Focus::Add, Key::Up) if count > 0 => Focus::Pencil(count / 2),
             (_, Key::Back) => {
-                return Nav::Alert(Alert::new("¿Salir de la aplicación?", None, AlertAction::Quit));
+                return Nav::Alert(Alert::new(Text::Key("Exit the app?"), None, AlertAction::Quit));
             }
             (focus, Key::Ok) => {
                 return match focus {
@@ -63,8 +64,8 @@ impl ProfilesScreen {
                     Focus::Add => Nav::Push(Box::new(super::profile_edit::ProfileEdit::create())),
                     Focus::Corner(0) => Nav::Push(Box::new(super::settings::SettingsPage::new(true))),
                     Focus::Corner(_) => Nav::Alert(Alert::new(
-                        "Cerrar Sesión",
-                        Some("¿Estás seguro de que quieres cerrar sesión?"),
+                        Text::Key("Sign Out"),
+                        Some(Text::Key("Are you sure you want to sign out?")),
                         AlertAction::SignOut,
                     )),
                 };
@@ -101,7 +102,7 @@ impl ProfilesScreen {
         let footer = if state.account.profiles.can_add { 72.0 + 64.0 } else { 0.0 };
         let block_h = 68.0 + 80.0 + size + 36.0 + 48.0 + footer;
         let top = (1080.0 - block_h) / 2.0;
-        ui.text_centered(Font::Bold, 56.0, 960.0, top, "¿Quién se irá de aventura?", TEXT);
+        ui.text_centered(Font::Bold, 56.0, 960.0, top, t("Who’s going on an adventure?"), TEXT);
         if list.is_empty() {
             for index in 0..3 {
                 let x = 960.0 - 1.5 * column + index as f32 * column + (column - size) / 2.0;
@@ -138,7 +139,7 @@ impl ProfilesScreen {
             x += column;
         }
         if state.account.profiles.can_add {
-            let label = "Agregar";
+            let label = t("Add");
             let w = ui.gfx.measure(Font::SemiBold, 23.0, label) + 60.0 + 26.0 + 12.0;
             let y = avatar_y + size + 36.0 + 48.0 + 72.0;
             ui.pill_plain(960.0 - w / 2.0, y, 64.0, label, Some(Icon::Plus), 23.0, Look::new(self.focus == Focus::Add, false));

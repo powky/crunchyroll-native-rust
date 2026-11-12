@@ -15,13 +15,13 @@ use crate::platform::Key;
 
 use super::controls::{DropNav, Dropdown};
 use super::feed::{DETAIL_DIM_SHADE, DETAIL_SHADE};
-use super::languages::language_name;
+use super::i18n::{Text, t, tr};
 use super::theme::*;
 use super::ui::{Backdrop, HeroSize, HeroView, Look, Ui, row_scroll};
 use super::worker::{Command, Event, Query};
 use super::{Env, Nav, Page, State};
 
-pub const NO_PLAYER: &str = "La reproducción llegará en una próxima versión.";
+pub const NO_PLAYER: Text = Text::Key("Playback is coming in a future version.");
 
 static NEXT_KEY: AtomicU64 = AtomicU64::new(1 << 40);
 
@@ -40,12 +40,12 @@ impl Action {
     fn hint(self, in_list: bool) -> String {
         match self {
             Action::Play => String::new(),
-            Action::Watchlist => if in_list { "Eliminar de mi lista" } else { "Agregar a mi lista" }.into(),
-            Action::Audio => "Audio y subtítulos".into(),
-            Action::Similar => "Similar".into(),
-            Action::Music => "Música".into(),
-            Action::Watched => "Marcar como visto".into(),
-            Action::Star(i) => format!("Calificar {i}/5"),
+            Action::Watchlist => if in_list { t("Remove from My List") } else { t("Add to My List") }.into(),
+            Action::Audio => t("Audio and subtitles").into(),
+            Action::Similar => t("Similar").into(),
+            Action::Music => t("Music").into(),
+            Action::Watched => t("Mark as watched").into(),
+            Action::Star(i) => tr!("Rate {}/5", i),
         }
     }
 }
@@ -202,17 +202,22 @@ impl ShowPage {
         self.request_list(worker);
     }
 
-    /// "Ver T1 · E1", "Continuar T2 · E5", or for a movie "Ver" / "Continuar".
+    /// "Watch S1 · E1", "Continue S2 · E5", or for a movie "Watch" / "Continue".
     fn play_label(&self) -> String {
         let next = self.show.as_ref().and_then(|s| s.up_next.clone());
         let resume = next.as_ref().and_then(|c| c.progress).is_some_and(|p| p > 0.0 && p < 0.98);
-        let verb = if resume { "Continuar" } else { "Ver" };
-        match (&next, self.kind) {
+        let episode = match (&next, self.kind) {
             (Some(card), Kind::Series) => match &card.episode {
-                Some(e) if !e.number.is_empty() => format!("{verb} T{} · E{}", e.season, e.number),
-                _ => verb.to_string(),
+                Some(e) if !e.number.is_empty() => Some(format!("{} · {}", tr!("S{}", e.season), tr!("E{}", e.number))),
+                _ => None,
             },
-            _ => verb.to_string(),
+            _ => None,
+        };
+        match (episode, resume) {
+            (Some(episode), true) => tr!("Continue {}", episode),
+            (Some(episode), false) => tr!("Watch {}", episode),
+            (None, true) => t("Continue").to_string(),
+            (None, false) => t("Watch").to_string(),
         }
     }
 
@@ -221,9 +226,9 @@ impl ShowPage {
         let numbers: Vec<&str> = show.seasons.iter().map(|s| s.display_number.as_str()).collect();
         let unique = numbers.iter().collect::<HashSet<_>>().len() == numbers.len() && numbers.iter().all(|n| !n.is_empty());
         match show.seasons.get(index) {
-            Some(season) if unique => format!("Temporada {}", season.display_number),
+            Some(season) if unique => tr!("Season {}", season.display_number),
             Some(season) if !season.title.is_empty() => season.title.clone(),
-            _ => format!("Temporada {}", index + 1),
+            _ => tr!("Season {}", index + 1),
         }
     }
 
@@ -232,11 +237,10 @@ impl ShowPage {
         let mut subtitle_codes = vec!["off".to_string()];
         subtitle_codes.extend(show.subtitle_locales.iter().cloned());
         let audio_codes = show.audio_locales.clone();
-        let names = |codes: &[String]| codes.iter().map(|c| language_name(c)).collect::<Vec<_>>();
-        let subtitle_names = names(&subtitle_codes);
-        let audio_names = names(&audio_codes);
-        let mut subtitles = Dropdown::new(&subtitle_names.iter().map(String::as_str).collect::<Vec<_>>(), 0, 525.0);
-        let mut audio = Dropdown::new(&audio_names.iter().map(String::as_str).collect::<Vec<_>>(), 0, 525.0);
+        // named as they're drawn, in the interface's language
+        let names = |codes: &[String]| codes.iter().map(|code| Text::Language(code.clone())).collect::<Vec<_>>();
+        let mut subtitles = Dropdown::new(names(&subtitle_codes), 0, 525.0);
+        let mut audio = Dropdown::new(names(&audio_codes), 0, 525.0);
         if let Some(profile) = profile {
             subtitles.selected = subtitle_codes.iter().position(|c| *c == profile.subtitle_language).unwrap_or(0);
             audio.selected = audio_codes.iter().position(|c| *c == profile.audio_language).unwrap_or(0);
@@ -586,8 +590,8 @@ impl Page for ShowPage {
         ui.backdrop(&mut self.backdrop, wanted, preview, shade);
 
         if self.failed {
-            ui.gfx.text(Font::Bold, 48.0, PAD, 200.0, "No se pudo cargar", TEXT, None);
-            ui.gfx.text(Font::Regular, 26.0, PAD, 280.0, "Pulsa Atrás para volver.", MUTED, None);
+            ui.gfx.text(Font::Bold, 48.0, PAD, 200.0, t("Couldn’t load"), TEXT, None);
+            ui.gfx.text(Font::Regular, 26.0, PAD, 280.0, t("Press Back to return."), MUTED, None);
             return;
         }
 
@@ -613,7 +617,7 @@ impl Page for ShowPage {
             };
             let mut y = ui.hero(PAD, TOP, &hero, 1.0) + 36.0;
             let mut at = Vec::with_capacity(2);
-            for (index, (label, dropdown)) in [("SUBTITULO", &view.subtitles), ("AUDIO", &view.audio)].into_iter().enumerate() {
+            for (index, (label, dropdown)) in [(t("SUBTITLES"), &view.subtitles), (t("AUDIO"), &view.audio)].into_iter().enumerate() {
                 field_title(ui, label, PAD + 6.0, y);
                 y += 36.0;
                 dropdown.draw(ui, PAD, y, focused && view.field == index);
@@ -726,7 +730,7 @@ impl ShowPage {
     fn draw_shelf(&mut self, ui: &mut Ui, focused: bool) {
         let head_y = SHELF_TOP;
         if let Some(extra) = self.extra.as_mut() {
-            let title = if extra.kind == ExtraKind::Similar { "Similar" } else { "Música" };
+            let title = if extra.kind == ExtraKind::Similar { t("Similar") } else { t("Music") };
             ui.gfx.text(Font::SemiBold, 28.0, PAD, head_y + 6.0, title, Color(0.96, 0.96, 0.97, 0.92), None);
             let cards_y = head_y + 48.0 + 6.0 + 24.0;
             match &extra.cards {
@@ -736,7 +740,7 @@ impl ShowPage {
                     }
                 }
                 Some(cards) if cards.is_empty() => {
-                    ui.text_centered(Font::SemiBold, 28.0, 960.0, cards_y + 80.0, "Vacío", DIM);
+                    ui.text_centered(Font::SemiBold, 28.0, 960.0, cards_y + 80.0, t("Empty"), DIM);
                 }
                 Some(cards) => {
                     extra.scroll = row_scroll(extra.scroll, extra.focus, 3, CARD_STEP, ui.dt);
@@ -756,13 +760,13 @@ impl ShowPage {
         if self.kind == Kind::Series {
             self.draw_season_head(ui, head_y, focused);
         } else {
-            ui.gfx.text(Font::SemiBold, 28.0, PAD, head_y + 6.0, "Películas", Color(0.96, 0.96, 0.97, 0.92), None);
+            ui.gfx.text(Font::SemiBold, 28.0, PAD, head_y + 6.0, t("Movies"), Color(0.96, 0.96, 0.97, 0.92), None);
         }
         let cards_y = head_y + 48.0 + 6.0 + 24.0;
         match self.episodes() {
             None => {
                 if self.show.as_ref().is_some_and(|s| s.seasons.is_empty()) && self.kind == Kind::Series {
-                    ui.text_centered(Font::SemiBold, 28.0, 960.0, cards_y + 80.0, "Vacío", DIM);
+                    ui.text_centered(Font::SemiBold, 28.0, 960.0, cards_y + 80.0, t("Empty"), DIM);
                     return;
                 }
                 for slot in 0..4 {
@@ -773,7 +777,7 @@ impl ShowPage {
                 }
             }
             Some(list) if list.is_empty() => {
-                ui.text_centered(Font::SemiBold, 28.0, 960.0, cards_y + 80.0, "Vacío", DIM);
+                ui.text_centered(Font::SemiBold, 28.0, 960.0, cards_y + 80.0, t("Empty"), DIM);
             }
             Some(list) => {
                 self.episode_focus = self.episode_focus.min(list.len() - 1);
@@ -800,8 +804,8 @@ impl ShowPage {
         let Some(show) = self.show.clone() else { return };
         // the tools on the right first: the tabs get what's left
         let all_watched = self.episodes().is_some_and(|list| !list.is_empty() && list.iter().all(|c| c.watched));
-        let mark_label = "Marcar temporada como vista";
-        let sort_label = if self.newest_first { "Más recientes primero" } else { "Más antiguos primero" };
+        let mark_label = t("Mark season as watched");
+        let sort_label = if self.newest_first { t("Newest first") } else { t("Oldest first") };
         let tool_w = |ui: &mut Ui, label: &str| ui.gfx.measure(Font::SemiBold, 22.0, label) + 2.0 * 20.0 + 22.0 * 1.1 + 12.0;
         let mark_w = tool_w(ui, mark_label);
         let sort_w = tool_w(ui, sort_label);

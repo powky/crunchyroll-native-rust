@@ -1,12 +1,13 @@
-//! The tvOS-style dialog over everything: a title, maybe a message, and Cancelar / Aceptar.
+//! The tvOS-style dialog over everything: a title, maybe a message, and Cancel / OK.
 
 use crate::gfx::{Color, Font, Rect};
 use crate::platform::Key;
 
+use super::i18n::{Text, t};
 use super::theme::*;
 use super::ui::{Look, Ui};
 
-/// What Aceptar does.
+/// What OK does.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AlertAction {
     Quit,
@@ -17,10 +18,10 @@ pub enum AlertAction {
 }
 
 pub struct Alert {
-    title: String,
-    message: Option<String>,
+    title: Text,
+    message: Option<Text>,
     pub action: AlertAction,
-    /// 0 is Cancelar, 1 Aceptar (a notice has only Aceptar)
+    /// 0 is Cancel, 1 OK (a notice has only OK)
     focus: usize,
 }
 
@@ -31,12 +32,12 @@ pub enum Choice {
 }
 
 impl Alert {
-    pub fn new(title: &str, message: Option<&str>, action: AlertAction) -> Alert {
-        Alert { title: title.into(), message: message.map(String::from), action, focus: 0 }
+    pub fn new(title: Text, message: Option<Text>, action: AlertAction) -> Alert {
+        Alert { title, message, action, focus: 0 }
     }
 
-    fn buttons(&self) -> &'static [&'static str] {
-        if self.action == AlertAction::Close { &["Aceptar"] } else { &["Cancelar", "Aceptar"] }
+    fn buttons(&self) -> Vec<&'static str> {
+        if self.action == AlertAction::Close { vec![t("OK")] } else { vec![t("Cancel"), t("OK")] }
     }
 
     pub fn key(&mut self, key: Key) -> Choice {
@@ -55,8 +56,9 @@ impl Alert {
 
     pub fn draw(&self, ui: &mut Ui) {
         ui.gfx.rect(Rect::new(0.0, 0.0, 1920.0, 1080.0), 0.0, Color(0.0, 0.0, 0.0, 0.5));
-        let title_w = ui.gfx.measure(Font::Bold, 36.0, &self.title);
-        let lines = self.message.as_ref().map(|m| ui.gfx.wrap(Font::Regular, 24.0, m, 900.0 - 112.0, 6)).unwrap_or_default();
+        let title = self.title.get();
+        let title_w = ui.gfx.measure(Font::Bold, 36.0, &title);
+        let lines = self.message.as_ref().map(|m| ui.gfx.wrap(Font::Regular, 24.0, &m.get(), 900.0 - 112.0, 6)).unwrap_or_default();
         let message_w = lines.iter().map(|l| ui.gfx.measure(Font::Regular, 24.0, l)).fold(0.0, f32::max);
         let buttons = self.buttons();
         let widths: Vec<f32> = buttons.iter().map(|b| ui.gfx.measure(Font::SemiBold, 23.0, b) + 60.0).collect();
@@ -67,7 +69,7 @@ impl Alert {
         ui.gfx.rect(card.inset(-1.0), 29.0, Color(1.0, 1.0, 1.0, 0.08));
         ui.gfx.rect(card, 28.0, Color(0.15, 0.15, 0.17, 0.97));
         let mut y = card.y + 48.0;
-        ui.text_centered(Font::Bold, 36.0, 960.0, y, &self.title, TEXT);
+        ui.text_centered(Font::Bold, 36.0, 960.0, y, &title, TEXT);
         y += 44.0;
         if !lines.is_empty() {
             y += 16.0;

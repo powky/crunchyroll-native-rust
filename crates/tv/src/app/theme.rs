@@ -1,9 +1,11 @@
-//! Colours, sizes and the Spanish text the screens share.
+//! Colours, sizes and the text the screens share.
 
 use crunchy_core::catalog::RowSpec;
 use crunchy_core::model::{Card, Kind};
 
 use crate::gfx::Color;
+
+use super::i18n::{self, Text, singular, t, tr};
 
 pub const BG: Color = Color::rgb(0x0b0b0e);
 pub const TEXT: Color = Color::rgb(0xf5f5f7);
@@ -24,26 +26,27 @@ pub const CARD_H: f32 = 216.0;
 pub const CARD_STEP: f32 = 432.0;
 pub const RADIUS: f32 = 14.0;
 
-pub fn row_title(spec: &RowSpec) -> String {
+/// A home row's title: ours for the rows we name, Crunchyroll's for the curated ones.
+pub fn row_title(spec: &RowSpec) -> Text {
     match spec {
-        RowSpec::ContinueWatching => "Seguir viendo".into(),
-        RowSpec::Watchlist => "Mi lista".into(),
-        RowSpec::Recommendations => "Recomendado para ti".into(),
-        RowSpec::Series { title, .. } => title.clone(),
-        RowSpec::Browse { .. } => "Explorar".into(),
-        RowSpec::SimilarTo { title, .. } => title.clone(),
-        RowSpec::Featured(_) => "Destacados".into(),
+        RowSpec::ContinueWatching => Text::Key("Continue watching"),
+        RowSpec::Watchlist => Text::Key("Watchlist"),
+        RowSpec::Recommendations => Text::Key("Recommended for you"),
+        RowSpec::Series { title, .. } => Text::Plain(title.clone()),
+        RowSpec::Browse { .. } => Text::Key("Browse"),
+        RowSpec::SimilarTo { title, .. } => Text::Plain(title.clone()),
+        RowSpec::Featured(_) => Text::Key("Featured"),
     }
 }
 
-/// The line under a card's title: "T1 · E5 — Name", "2023 · 2 temporadas", "Película".
+/// The line under a card's title: "S1 · E5 — Name", "2023 · 2 seasons", "Movie".
 pub fn card_subtitle(card: &Card) -> String {
     match card.kind {
         Kind::Episode => match &card.episode {
             Some(episode) => {
-                let mut out = format!("T{}", episode.season);
+                let mut out = tr!("S{}", episode.season);
                 if !episode.number.is_empty() {
-                    out.push_str(&format!(" · E{}", episode.number));
+                    out.push_str(&format!(" · {}", tr!("E{}", episode.number)));
                 }
                 if !episode.name.is_empty() {
                     out.push_str(&format!(" — {}", episode.name));
@@ -63,48 +66,48 @@ pub fn card_subtitle(card: &Card) -> String {
             parts.join(" · ")
         }
         Kind::MovieListing | Kind::Movie => match card.year {
-            Some(year) => format!("{year} · Película"),
-            None => "Película".into(),
+            Some(year) => format!("{year} · {}", t("Movie")),
+            None => t("Movie").into(),
         },
         Kind::MusicVideo | Kind::Concert => {
-            let minutes = card.episode.as_ref().map(|e| e.duration_secs).filter(|d| *d > 0).map(|d| format!("{} min", ((d as f32 / 60.0).round() as u32).max(1)));
+            let minutes = card.episode.as_ref().map(|e| e.duration_secs).filter(|d| *d > 0).map(|d| tr!("{} min", ((d as f32 / 60.0).round() as u32).max(1)));
             [card.artist.clone(), minutes].into_iter().flatten().collect::<Vec<_>>().join(" · ")
         }
-        Kind::Artist => "Artista".into(),
+        Kind::Artist => t("Artist").into(),
         Kind::Season => String::new(),
     }
 }
 
 pub fn seasons_text(count: u32) -> String {
-    if count == 1 { "1 temporada".into() } else { format!("{count} temporadas") }
+    if singular(count) { tr!("{} season", count) } else { tr!("{} seasons", count) }
 }
 
 pub fn episodes_text(count: u32) -> String {
-    if count == 1 { "1 episodio".into() } else { format!("{count} episodios") }
+    if singular(count) { tr!("{} episode", count) } else { tr!("{} episodes", count) }
 }
 
-/// "Sub | Dob", "Sub", "Dob".
+/// "Sub | Dub", "Sub", "Dub".
 pub fn audio_text(card: &Card) -> Option<&'static str> {
     match (card.subbed, card.dubbed) {
-        (true, true) => Some("Sub | Dob"),
-        (true, false) => Some("Sub"),
-        (false, true) => Some("Dob"),
+        (true, true) => Some(t("Sub | Dub")),
+        (true, false) => Some(t("Sub")),
+        (false, true) => Some(t("Dub")),
         (false, false) => None,
     }
 }
 
-/// "4,8": Spanish decimals.
+/// "4.8", or "4,8" where the decimal mark is a comma.
 pub fn rating_text(rating: f32) -> String {
-    format!("{rating:.1}").replace('.', ",")
+    i18n::one_decimal(rating)
 }
 
 /// What kind of show it is, for the eyebrow over a hero.
 pub fn eyebrow(kind: Kind) -> &'static str {
     match kind {
-        Kind::MovieListing | Kind::Movie => "PELÍCULA",
-        Kind::MusicVideo | Kind::Concert => "MÚSICA",
-        Kind::Artist => "ARTISTA",
-        _ => "SERIES",
+        Kind::MovieListing | Kind::Movie => t("MOVIE"),
+        Kind::MusicVideo | Kind::Concert => t("MUSIC"),
+        Kind::Artist => t("ARTIST"),
+        _ => t("SERIES"),
     }
 }
 

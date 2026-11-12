@@ -27,6 +27,8 @@ use tokio::sync::{Mutex, Semaphore, mpsc};
 use crate::gfx::PixelFormat;
 use crate::player::{self, Playback, Wanted};
 
+use super::i18n::{self, Text};
+
 /// Sign-in codes shown one after another (5 minutes each) before the screen asks for OK.
 const CODE_RENEWALS: usize = 6;
 /// The picture cache on disk is trimmed to this at launch, least recently used first.
@@ -137,13 +139,13 @@ pub enum Event {
     ContentLanguage,
     Image { url: String, width: u32, height: u32, format: PixelFormat, pixels: Vec<u8> },
     ImageFailed(String),
-    Error(String),
+    Error(Text),
     /// a toast that isn't an error
-    Info(String),
+    Info(Text),
     /// the video asked for is playing (its id, the playback to control)
     Playback(String, Arc<Playback>),
     /// it couldn't be played (its id, why)
-    PlaybackFailed(String, String),
+    PlaybackFailed(String, Text),
     /// the episode after (or before) the one with this id, if there's one
     Adjacent { id: String, forward: bool, card: Option<Card> },
     SkipEvents(String, Vec<SkipEvent>),
@@ -238,11 +240,15 @@ impl Worker {
     }
 }
 
-/// An error for a toast: its first line, without the request's details.
-fn short_error(error: &anyhow::Error) -> String {
+/// An error for a toast: its first line, without the request's details. One of ours ([`Text`]) shows in the
+/// interface's language; the rest as they came.
+fn short_error(error: &anyhow::Error) -> Text {
+    if let Some(text) = error.downcast_ref::<Text>() {
+        return text.clone();
+    }
     let text = format!("{error}");
     let text: String = text.lines().next().unwrap_or("").chars().take(140).collect();
-    if text.is_empty() { "Ocurrió un error".into() } else { text }
+    if text.is_empty() { Text::Key("Something went wrong") } else { Text::Plain(text) }
 }
 
 fn locale() -> Locale {
@@ -505,7 +511,7 @@ async fn handle(shared: &Arc<Shared>, command: Command) -> Result<()> {
                 let cards = ctx.episodes(&id).await?;
                 let _ = shared.events.send(Event::Episodes(id.clone(), cards));
             } else {
-                let _ = shared.events.send(Event::Info("Marcado como visto".into()));
+                let _ = shared.events.send(Event::Info(Text::Key("Marked as watched")));
             }
             let _ = shared.events.send(Event::MarkedWatched(id));
         }
@@ -577,7 +583,8 @@ async fn handle(shared: &Arc<Shared>, command: Command) -> Result<()> {
         }
         Command::Avatars => {
             let crunchy = crunchy(shared).await?;
-            let albums = account::avatars(&crunchy, &locale().to_string()).await?;
+            // the albums' names in the interface's language
+            let albums = account::avatars(&crunchy, i18n::lang().locale()).await?;
             let _ = shared.events.send(Event::Avatars(albums));
         }
         Command::Usernames => {

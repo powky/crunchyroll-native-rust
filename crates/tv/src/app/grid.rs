@@ -12,6 +12,7 @@ use crate::gfx::{Color, Font, Icon, Rect};
 use crate::platform::Key;
 
 use super::controls::{DropNav, Dropdown, FieldNav, PillRow, SearchField};
+use super::i18n::{Text, t};
 use super::theme::*;
 use super::topbar::{Tab, local_date, parse_iso, short_datetime};
 use super::ui::{CARD_PICTURE, HeroSize, HeroView, Look, Ui};
@@ -200,7 +201,7 @@ impl CardGrid {
         }
         let len = self.len();
         if len == 0 {
-            let text = if self.failed { "No se pudo cargar" } else { "Vacío" };
+            let text = if self.failed { t("Couldn’t load") } else { t("Empty") };
             ui.text_centered(Font::SemiBold, 28.0, 960.0, top + 120.0, text, DIM);
             return;
         }
@@ -313,13 +314,15 @@ pub struct GridPage {
     genres: Option<(String, Vec<String>)>,
 }
 
-const SORTS: [(&str, Sort); 3] = [("Reciente", Sort::NewlyAdded), ("Popular", Sort::Popularity), ("Alfabético", Sort::Alphabetical)];
-const AUDIOS: [(&str, Audio); 3] = [("Todo", Audio::All), ("Subtitulado", Audio::Subbed), ("Doblado", Audio::Dubbed)];
+const SORTS: [(Text, Sort); 3] =
+    [(Text::Key("Newest"), Sort::NewlyAdded), (Text::Key("Popular"), Sort::Popularity), (Text::Key("Alphabetical"), Sort::Alphabetical)];
+const AUDIOS: [(Text, Audio); 3] =
+    [(Text::Key("All"), Audio::All), (Text::Key("Subtitled"), Audio::Subbed), (Text::Key("Dubbed"), Audio::Dubbed)];
 
 impl GridPage {
     fn base(tab: Tab, kind: Kind2, query: Query, subtitle: Subtitle, sort: usize) -> GridPage {
-        let sorts: Vec<&str> = SORTS.iter().map(|(name, _)| *name).collect();
-        let audios: Vec<&str> = AUDIOS.iter().map(|(name, _)| *name).collect();
+        let sorts = SORTS.into_iter().map(|(name, _)| name).collect();
+        let audios = AUDIOS.into_iter().map(|(name, _)| name).collect();
         let by_date = kind == Kind2::Simulcast;
         GridPage {
             tab,
@@ -327,9 +330,9 @@ impl GridPage {
             zone: Zone::Grid,
             grid: CardGrid::new(query, subtitle, by_date),
             field: SearchField::new(720.0),
-            sort: Dropdown::new(&sorts, sort, 300.0),
-            audio: Dropdown::new(&audios, 0, 300.0),
-            pills: PillRow::new(vec!["Todo".into()]),
+            sort: Dropdown::new(sorts, sort, 300.0),
+            audio: Dropdown::new(audios, 0, 300.0),
+            pills: PillRow::new(vec![Text::Key("All")]),
             categories: Vec::new(),
             seasons: Vec::new(),
             season: 0,
@@ -435,8 +438,8 @@ impl Page for GridPage {
         match event {
             Event::Categories(list) if self.kind == Kind2::Catalog => {
                 self.categories = list.clone();
-                let mut labels = vec!["Todo".to_string()];
-                labels.extend(list.iter().map(|c| c.title.clone()));
+                let mut labels = vec![Text::Key("All")];
+                labels.extend(list.iter().map(|c| Text::Plain(c.title.clone())));
                 self.pills.labels = labels;
             }
             Event::SeasonalTags(list) if self.kind == Kind2::Simulcast => {
@@ -594,7 +597,7 @@ impl Page for GridPage {
                     ui.circle_button(x + 24.0, cy, 48.0, Icon::Back, Look::new(focus(2), false));
                 }
                 x += 48.0 + 16.0;
-                let title = self.seasons.get(self.season).map(|s| s.title.as_str()).unwrap_or("Simulcast");
+                let title = self.seasons.get(self.season).map(|s| s.title.as_str()).unwrap_or(t("Simulcast"));
                 x += ui.gfx.text(Font::SemiBold, 28.0, x, cy - 18.0, title, TEXT, Some(600.0)) + 16.0;
                 if newer {
                     ui.circle_button(x + 24.0, cy, 48.0, Icon::ChevronRight, Look::new(focus(3), false));

@@ -6,6 +6,7 @@ use crunchy_core::model::{BACKDROP_WIDTH, Card, Kind};
 
 use crate::gfx::{Color, Font, Icon, Rect, Renderer};
 
+use super::i18n::{t, tr};
 use super::images::Images;
 use super::theme::*;
 use super::worker::Worker;
@@ -138,7 +139,7 @@ impl Ui<'_> {
         self.gfx.icon_centered(icon, cx, cy, d * 0.44, ink);
     }
 
-    /// The facts under a hero's title: a maturity badge, then year · seasons · episodes · Sub | Dob · ★ 4,8.
+    /// The facts under a hero's title: a maturity badge, then year · seasons · episodes · Sub | Dub · ★ 4.8.
     /// Returns the width drawn.
     pub fn meta_line(&mut self, card: &Card, x: f32, y: f32, size: f32, alpha: f32) -> f32 {
         let mut cx = x;
@@ -159,7 +160,7 @@ impl Ui<'_> {
                     parts.push(year.to_string());
                 }
                 if let Some(duration) = card.episode.as_ref().map(|e| e.duration_secs).filter(|d| *d > 0) {
-                    parts.push(format!("{} min", ((duration as f32 / 60.0).round() as u32).max(1)));
+                    parts.push(tr!("{} min", ((duration as f32 / 60.0).round() as u32).max(1)));
                 }
             }
             _ => {
@@ -254,7 +255,7 @@ impl Ui<'_> {
         self.picture(card.image.as_deref(), art, RADIUS, alpha, CARD_PICTURE);
         let episode = card.episode.clone().unwrap_or_default();
         if episode.duration_secs > 0 {
-            let label = format!("{} min", ((episode.duration_secs as f32 / 60.0).round() as u32).max(1));
+            let label = tr!("{} min", ((episode.duration_secs as f32 / 60.0).round() as u32).max(1));
             let w = self.gfx.measure(Font::SemiBold, 16.0, &label) + 16.0;
             let badge = Rect::new(art.x + art.w - w - 14.0, art.y + art.h - 30.0 - 24.0, w, 24.0);
             self.gfx.rect(badge, 6.0, Color(0.0, 0.0, 0.0, 0.66 * alpha));
@@ -403,7 +404,7 @@ impl Ui<'_> {
         if !show_logo && view.size != HeroSize::Home {
             let mut text = eyebrow(card.kind).to_string();
             if card.kind == Kind::Episode {
-                text = "EPISODIO".into();
+                text = t("EPISODE").into();
             }
             y += self.eyebrow(&text, x, y, alpha) - 6.0;
         }
@@ -442,7 +443,7 @@ impl Ui<'_> {
         }
         let subtitle = match card.kind {
             Kind::Episode => card.episode.as_ref().map(|e| {
-                if e.number.is_empty() { format!("T{}", e.season) } else { format!("T{} · E{}", e.season, e.number) }
+                if e.number.is_empty() { tr!("S{}", e.season) } else { format!("{} · {}", tr!("S{}", e.season), tr!("E{}", e.number)) }
             }),
             Kind::MusicVideo | Kind::Concert => card.artist.clone(),
             _ => None,
@@ -471,14 +472,14 @@ impl Ui<'_> {
         y
     }
 
-    /// "▬▬▬ Quedan 12 min" under a hero, for something half watched.
+    /// "▬▬▬ 12 min left" under a hero, for something half watched.
     pub fn resume_line(&mut self, card: &Card, x: f32, y: f32, width: f32, alpha: f32) -> bool {
         let Some(progress) = card.progress.filter(|p| *p > 0.0 && *p < 0.98) else { return false };
         let Some(duration) = card.episode.as_ref().map(|e| e.duration_secs).filter(|d| *d > 0) else { return false };
         let left = ((duration as f32 / 60.0) * (1.0 - progress)).round().max(1.0);
         self.gfx.rect(Rect::new(x, y + 9.0, width, 6.0), 3.0, Color(1.0, 1.0, 1.0, 0.24 * alpha));
         self.gfx.rect(Rect::new(x, y + 9.0, width * progress, 6.0), 3.0, TEXT.alpha(alpha));
-        self.gfx.text(Font::SemiBold, 21.0, x + width + 16.0, y, &format!("Quedan {left} min"), MUTED.alpha(alpha), None);
+        self.gfx.text(Font::SemiBold, 21.0, x + width + 16.0, y, &tr!("{} min left", left), MUTED.alpha(alpha), None);
         true
     }
 }

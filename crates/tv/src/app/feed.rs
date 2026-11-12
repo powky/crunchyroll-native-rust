@@ -10,12 +10,13 @@ use crunchy_core::model::{BACKDROP_WIDTH, Card, Kind};
 use crate::gfx::{Color, Font, Rect};
 use crate::platform::Key;
 
+use super::i18n::{Text, t};
 use super::theme::*;
 use super::worker::Command;
 use super::ui::{Backdrop, CARD_PICTURE, HeroSize, HeroView, Shade, Ui, row_scroll};
 
 pub struct FeedRow {
-    pub title: String,
+    pub title: Text,
     pub cards: Option<Vec<Card>>,
     pub requested: bool,
     pub focus: usize,
@@ -23,7 +24,7 @@ pub struct FeedRow {
 }
 
 impl FeedRow {
-    pub fn new(title: String) -> FeedRow {
+    pub fn new(title: Text) -> FeedRow {
         FeedRow { title, cards: None, requested: false, focus: 0, scroll: 0.0 }
     }
 }
@@ -224,7 +225,7 @@ impl Feed {
                 continue;
             }
             let title_color = Color(0.96, 0.96, 0.97, 0.92);
-            ui.gfx.text(Font::SemiBold, 28.0, PAD, y, &row.title, title_color, Some(1400.0));
+            ui.gfx.text(Font::SemiBold, 28.0, PAD, y, &row.title.get(), title_color, Some(1400.0));
             let cards_y = y + 60.0;
             row.scroll = row_scroll(row.scroll, row.focus, 3, CARD_STEP, ui.dt);
             match &row.cards {
@@ -237,7 +238,7 @@ impl Feed {
                     }
                 }
                 Some(cards) if cards.is_empty() => {
-                    ui.gfx.text(Font::SemiBold, 28.0, PAD, cards_y + 80.0, "Vacío", DIM, None);
+                    ui.gfx.text(Font::SemiBold, 28.0, PAD, cards_y + 80.0, t("Empty"), DIM, None);
                 }
                 Some(cards) => {
                     let first = (row.scroll / CARD_STEP) as usize;

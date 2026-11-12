@@ -11,6 +11,7 @@ use crate::gfx::{Color, Font, Icon, Rect};
 use crate::platform::Key;
 
 use super::alert::{Alert, AlertAction};
+use super::i18n::{self, Lang, Text, t, tr};
 use super::languages::language_name;
 use super::theme::*;
 use super::topbar::Tab;
@@ -42,6 +43,8 @@ pub struct Settings {
     pub ui_resolution: String,
     /// the profile chosen last, focused first in the picker
     pub last_profile: Option<String>,
+    /// the interface's language: "auto" (the TV's), or en, es, pt, fr, de or it
+    pub ui_language: String,
 }
 
 impl Default for Settings {
@@ -58,6 +61,7 @@ impl Default for Settings {
             hidden_tabs: Vec::new(),
             ui_resolution: "1080p".into(),
             last_profile: None,
+            ui_language: "auto".into(),
         }
     }
 }
@@ -106,6 +110,7 @@ enum Row {
     Clock,
     Resolution,
     TabShown(Tab),
+    UiLanguage,
     ContentLanguage,
     AudioLanguage,
     SubtitleLanguage,
@@ -115,19 +120,20 @@ enum Row {
 impl Row {
     fn label(self) -> &'static str {
         match self {
-            Row::Quality => "Calidad de vídeo",
-            Row::Subtitles => "Subtítulos",
-            Row::Previews => "Vistas previas",
-            Row::SkipFor => "Mostrar «Saltar intro»",
-            Row::FirstRow => "Primera fila",
-            Row::Interface => "Interfaz",
-            Row::Clock => "Reloj",
-            Row::Resolution => "Resolución de la interfaz",
+            Row::Quality => t("Video quality"),
+            Row::Subtitles => t("Subtitles"),
+            Row::Previews => t("Previews"),
+            Row::SkipFor => t("Show “Skip intro”"),
+            Row::FirstRow => t("First row"),
+            Row::Interface => t("Interface"),
+            Row::Clock => t("Clock"),
+            Row::Resolution => t("Interface resolution"),
             Row::TabShown(tab) => tab.label(),
-            Row::ContentLanguage => "Títulos y sinopsis",
-            Row::AudioLanguage => "Audio preferido",
-            Row::SubtitleLanguage => "Subtítulos preferidos",
-            Row::SignOut => "Cerrar Sesión",
+            Row::UiLanguage => t("Interface language"),
+            Row::ContentLanguage => t("Titles and synopses"),
+            Row::AudioLanguage => t("Preferred audio"),
+            Row::SubtitleLanguage => t("Preferred subtitles"),
+            Row::SignOut => t("Sign Out"),
         }
     }
 
@@ -145,6 +151,7 @@ impl Row {
             Row::TabShown(Tab::Music) => Icon::Note,
             Row::TabShown(Tab::MyList) => Icon::Heart,
             Row::TabShown(_) => Icon::Film,
+            Row::UiLanguage => Icon::Tv,
             Row::ContentLanguage => Icon::TextSize,
             Row::AudioLanguage => Icon::Speaker,
             Row::SignOut => Icon::Logout,
@@ -157,15 +164,15 @@ const CONTENT_LANGUAGES: [&str; 11] =
 
 fn sections() -> Vec<(&'static str, Vec<Row>)> {
     vec![
-        ("REPRODUCCIÓN", vec![Row::Quality, Row::Subtitles, Row::Previews, Row::SkipFor]),
-        ("INICIO", vec![Row::FirstRow, Row::Interface, Row::Clock]),
-        ("PANTALLA", vec![Row::Resolution]),
+        (t("PLAYBACK"), vec![Row::Quality, Row::Subtitles, Row::Previews, Row::SkipFor]),
+        (t("HOME"), vec![Row::FirstRow, Row::Interface, Row::Clock]),
+        (t("DISPLAY"), vec![Row::Resolution]),
         (
-            "BARRA SUPERIOR",
+            t("TOP BAR"),
             vec![Tab::Simulcast, Tab::Series, Tab::Movies, Tab::Music, Tab::MyList].into_iter().map(Row::TabShown).collect(),
         ),
-        ("IDIOMA", vec![Row::ContentLanguage, Row::AudioLanguage, Row::SubtitleLanguage]),
-        ("CUENTA", vec![Row::SignOut]),
+        (t("LANGUAGE"), vec![Row::UiLanguage, Row::ContentLanguage, Row::AudioLanguage, Row::SubtitleLanguage]),
+        (t("ACCOUNT"), vec![Row::SignOut]),
     ]
 }
 
@@ -174,7 +181,7 @@ fn options(row: Row, state: &State) -> Vec<(String, String)> {
     let pairs = |list: &[(&str, &str)]| list.iter().map(|(v, l)| (v.to_string(), l.to_string())).collect();
     match row {
         Row::Quality => pairs(&[
-            ("adaptive", "Automático"),
+            ("adaptive", t("Automatic")),
             ("2160p", "4K (2160p)"),
             ("1080p", "Full HD (1080p)"),
             ("720p", "HD (720p)"),
@@ -182,14 +189,18 @@ fn options(row: Row, state: &State) -> Vec<(String, String)> {
             ("360p", "360p"),
             ("240p", "240p"),
         ]),
-        Row::Subtitles => pairs(&[("hardsub", "Incrustados en el vídeo (Hardsub)"), ("softsub", "Dibujados por la app (Softsub)")]),
-        Row::Previews => pairs(&[("yes", "Sí"), ("no", "No")]),
-        Row::SkipFor => pairs(&[("5", "5 segundos"), ("10", "10 segundos"), ("15", "15 segundos"), ("30", "30 segundos")]),
-        Row::FirstRow => pairs(&[("suggestions", "Sugerencias"), ("continue", "Seguir viendo")]),
-        Row::Interface => pairs(&[("full", "Completo"), ("lite", "Ligero")]),
-        Row::Clock => pairs(&[("24", "24 horas"), ("12", "12 horas (a. m. / p. m.)")]),
-        Row::Resolution => pairs(&[("1080p", "1080p (recomendada)"), ("1440p", "1440p"), ("2160p", "4K (2160p)")]),
-        Row::TabShown(_) => pairs(&[("show", "Mostrar"), ("hide", "Ocultar")]),
+        Row::Subtitles => pairs(&[("hardsub", t("Burned into the video (Hardsub)")), ("softsub", t("Drawn by the app (Softsub)"))]),
+        Row::Previews => pairs(&[("yes", t("Yes")), ("no", t("No"))]),
+        Row::SkipFor => [5, 10, 15, 30].iter().map(|seconds| (seconds.to_string(), tr!("{} seconds", seconds))).collect(),
+        Row::FirstRow => pairs(&[("suggestions", t("Suggestions")), ("continue", t("Continue watching"))]),
+        Row::Interface => pairs(&[("full", t("Full")), ("lite", t("Lite"))]),
+        Row::Clock => pairs(&[("24", t("24-hour")), ("12", t("12-hour (AM / PM)"))]),
+        Row::Resolution => pairs(&[("1080p", t("1080p (recommended)")), ("1440p", "1440p"), ("2160p", "4K (2160p)")]),
+        Row::TabShown(_) => pairs(&[("show", t("Show")), ("hide", t("Hide"))]),
+        // the TV's language first, then each by its own name
+        Row::UiLanguage => std::iter::once(("auto".to_string(), tr!("TV language ({})", i18n::tv_lang().endonym())))
+            .chain(Lang::ALL.iter().map(|lang| (lang.code().to_string(), lang.endonym().to_string())))
+            .collect(),
         Row::ContentLanguage => CONTENT_LANGUAGES.iter().map(|code| (code.to_string(), language_name(code))).collect(),
         Row::AudioLanguage => {
             let mut list = vec![("ja-JP".to_string(), language_name("ja-JP"))];
@@ -199,7 +210,7 @@ fn options(row: Row, state: &State) -> Vec<(String, String)> {
             list
         }
         Row::SubtitleLanguage => {
-            let mut list = vec![("off".to_string(), "Desactivar".to_string())];
+            let mut list = vec![("off".to_string(), t("None").to_string())];
             if let Some((_, subtitles)) = &state.account.languages {
                 list.extend(subtitles.iter().map(|(code, _)| (code.clone(), language_name(code))));
             }
@@ -223,6 +234,7 @@ fn value(row: Row, state: &State) -> Option<String> {
         Row::Clock => if s.clock_24h { "24" } else { "12" }.into(),
         Row::Resolution => s.ui_resolution.clone(),
         Row::TabShown(tab) => if s.tab_hidden(tab) { "hide" } else { "show" }.into(),
+        Row::UiLanguage => Lang::from_code(&s.ui_language).map_or("auto", Lang::code).into(),
         Row::ContentLanguage => profile?.content_language.clone(),
         Row::AudioLanguage => profile?.audio_language.clone(),
         Row::SubtitleLanguage => profile?.subtitle_language.clone(),
@@ -234,7 +246,7 @@ fn value_label(row: Row, state: &State) -> Option<String> {
     let value = value(row, state)?;
     match row {
         Row::ContentLanguage | Row::AudioLanguage => Some(language_name(&value)),
-        Row::SubtitleLanguage => Some(if value == "off" { "Desactivar".into() } else { language_name(&value) }),
+        Row::SubtitleLanguage => Some(language_name(&value)),
         _ => options(row, state).into_iter().find(|(v, _)| *v == value).map(|(_, label)| label),
     }
 }
@@ -280,6 +292,11 @@ impl SettingsPage {
                 if chosen == "hide" {
                     s.hidden_tabs.push(tab.key().to_string());
                 }
+            }
+            // at once: everything, this page too, draws in it from the next frame
+            Row::UiLanguage => {
+                s.ui_language = chosen.into();
+                i18n::apply(chosen);
             }
             Row::ContentLanguage | Row::AudioLanguage | Row::SubtitleLanguage => {
                 let Some(profile) = env.state.account.profile().cloned() else { return Nav::Stay };
@@ -347,8 +364,8 @@ impl Page for SettingsPage {
             Key::Ok => match rows[self.focus] {
                 Row::SignOut => {
                     return Nav::Alert(Alert::new(
-                        "Cerrar Sesión",
-                        Some("¿Estás seguro de que quieres cerrar sesión?"),
+                        Text::Key("Sign Out"),
+                        Some(Text::Key("Are you sure you want to sign out?")),
                         AlertAction::SignOut,
                     ));
                 }
@@ -372,7 +389,7 @@ impl Page for SettingsPage {
         let tile = Rect::new(48.0 + (620.0 - 300.0) / 2.0, y0, 300.0, 300.0);
         ui.gfx.gradient_rounded(tile, 66.0, Color::rgb(0x3a3a42), Color::rgb(0x1c1c21), true);
         ui.gfx.icon_centered(Icon::Gear, tile.x + 150.0, tile.y + 150.0, 190.0, Color::rgb(0xd1d1d6));
-        ui.text_centered(Font::Bold, 56.0, 358.0, y0 + 340.0, "Ajustes", TEXT);
+        ui.text_centered(Font::Bold, 56.0, 358.0, y0 + 340.0, t("Settings"), TEXT);
         let version = concat!("Crunchy ", env!("CARGO_PKG_VERSION"));
         ui.text_centered(Font::Regular, 22.0, 358.0, y0 + 418.0, version, DIM);
 
@@ -468,4 +485,18 @@ fn row_rect(y: f32, focused: bool) -> Rect {
 
 fn draw_row_box(ui: &mut Ui, r: Rect, focused: bool) {
     ui.gfx.rect(r, 14.0, if focused { TEXT } else { Color(1.0, 1.0, 1.0, 0.07) });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Settings;
+
+    #[test]
+    fn settings_saved_before_the_language_was_one_still_load() {
+        let saved = r#"{"video_quality":"720p","subtitles":"softsub","previews":false,"continue_first":true,"lite":false,
+            "clock_24h":false,"hidden_tabs":["musics"],"ui_resolution":"1080p","last_profile":null}"#;
+        let settings: Settings = serde_json::from_str(saved).unwrap();
+        assert_eq!(settings.ui_language, "auto");
+        assert_eq!((settings.video_quality.as_str(), settings.clock_24h), ("720p", false));
+    }
 }

@@ -10,6 +10,7 @@ use crate::platform::Key;
 use super::controls::{FieldNav, SearchField};
 use super::feed::{Feed, FeedNav, FeedRow};
 use super::grid::{CardGrid, GridNav, Subtitle};
+use super::i18n::Text;
 use super::ui::Ui;
 use super::worker::{Command, Event, Query};
 use super::{Env, Nav, Page, State};
@@ -64,7 +65,7 @@ impl Page for MusicPage {
         match event {
             Event::MusicFeed(rows) => {
                 self.rows = rows.clone();
-                let feed_rows = rows.iter().map(|row| FeedRow::new(row.title.clone())).collect();
+                let feed_rows = rows.iter().map(|row| FeedRow::new(Text::Plain(row.title.clone()))).collect();
                 self.feed = Some(Feed::new(feed_rows, 250.0));
             }
             Event::MusicRow(index, cards) => {

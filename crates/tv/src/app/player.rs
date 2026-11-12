@@ -22,6 +22,8 @@ use crate::platform::{self, Key};
 use crate::player::Tracks;
 use crate::player::{Playback, Wanted};
 
+use super::i18n::{Text, t, tr};
+use super::languages;
 use super::theme::*;
 use super::worker::{Command, Event, Worker};
 use super::ui::{CARD_PICTURE, Ui};
@@ -64,8 +66,8 @@ const SKIP_H: f32 = 84.0;
 /// How long the still takes to fade away once the video shows.
 const STILL_FADE: Duration = Duration::from_millis(600);
 
-const QUALITIES: [(&str, &str); 6] =
-    [("Automática", "adaptive"), ("1080p", "1080p"), ("720p", "720p"), ("480p", "480p"), ("360p", "360p"), ("240p", "240p")];
+/// The qualities the menu offers, as the setting stores them.
+const QUALITIES: [&str; 6] = ["adaptive", "1080p", "720p", "480p", "360p", "240p"];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Control {
@@ -84,17 +86,17 @@ enum Control {
 impl Control {
     fn name(self, paused: bool) -> &'static str {
         match self {
-            Control::Info => "Información",
-            Control::Watched => "Marcar como visto",
-            Control::ThumbDown => "No me gusta",
-            Control::ThumbUp => "Me gusta",
-            Control::Previous => "Episodio anterior",
-            Control::PlayPause if paused => "Reproducir",
-            Control::PlayPause => "Pausar",
-            Control::Next => "Episodio siguiente",
-            Control::Subtitles => "Subtítulos",
-            Control::Audio => "Audio",
-            Control::Quality => "Calidad",
+            Control::Info => t("Info"),
+            Control::Watched => t("Mark as watched"),
+            Control::ThumbDown => t("Dislike"),
+            Control::ThumbUp => t("Like"),
+            Control::Previous => t("Previous episode"),
+            Control::PlayPause if paused => t("Play"),
+            Control::PlayPause => t("Pause"),
+            Control::Next => t("Next episode"),
+            Control::Subtitles => t("Subtitles"),
+            Control::Audio => t("Audio"),
+            Control::Quality => t("Quality"),
         }
     }
 }
@@ -113,11 +115,10 @@ enum MenuKind {
     Quality,
 }
 
-/// A menu over its button: labels and the values they stand for.
+/// A menu over its button: the values it offers (named as it's drawn, in the interface's language).
 struct Menu {
     kind: MenuKind,
-    title: &'static str,
-    options: Vec<(String, String)>,
+    options: Vec<String>,
     selected: usize,
     focus: usize,
 }
@@ -136,7 +137,7 @@ pub struct PlayerPage {
     /// the id last asked of the worker, to know its answer
     requested: Option<String>,
     playback: Option<Arc<Playback>>,
-    failed: Option<String>,
+    failed: Option<Text>,
     /// the picture has shown (until then the page draws its own background)
     started: bool,
     /// when the version playing was asked for, and when its picture showed (the still fades away over it)
@@ -193,7 +194,7 @@ pub struct PlayerPage {
     /// the episode after this one, asked for as it starts playing: unknown, none, or it
     next: Option<Option<Card>>,
     next_asked: bool,
-    notice: Option<(String, Instant)>,
+    notice: Option<(Text, Instant)>,
     /// nothing comes after the end: the page closes
     done: bool,
     /// the simulator's stand-in: no worker requests, a clock instead of a video
@@ -426,8 +427,8 @@ impl PlayerPage {
                 self.change(worker, card, position);
             }
             None if self.ended_at.is_some() => self.done = true,
-            None if forward => self.say("No hay un episodio siguiente"),
-            None => self.say("No hay un episodio anterior"),
+            None if forward => self.say(Text::Key("There’s no next episode")),
+            None => self.say(Text::Key("There’s no previous episode")),
         }
     }
 
@@ -440,22 +441,22 @@ impl PlayerPage {
     fn skip_look(&self, event: &SkipEvent) -> (&'static str, Icon) {
         if Self::ending(event) {
             match &self.next {
-                Some(Some(_)) => return ("Siguiente episodio", Icon::NextEpisode),
-                Some(None) => return ("Terminar", Icon::Xmark),
+                Some(Some(_)) => return (t("Next Episode"), Icon::NextEpisode),
+                Some(None) => return (t("Finish"), Icon::Xmark),
                 None => {}
             }
         }
         let label = match event.kind.as_str() {
-            "recap" => "Saltar resumen",
-            "intro" => "Saltar intro",
-            "credits" => "Saltar créditos",
-            _ => "Saltar avance",
+            "recap" => t("Skip recap"),
+            "intro" => t("Skip intro"),
+            "credits" => t("Skip credits"),
+            _ => t("Skip preview"),
         };
         (label, Icon::Skip)
     }
 
-    fn say(&mut self, text: &str) {
-        self.notice = Some((text.to_string(), Instant::now()));
+    fn say(&mut self, text: Text) {
+        self.notice = Some((text, Instant::now()));
     }
 
     // ---- controls ----
@@ -629,25 +630,20 @@ impl PlayerPage {
 
     fn open_menu(&mut self, kind: MenuKind, state: &State) {
         let Some(tracks) = self.playback.as_ref().map(|playback| &playback.tracks) else { return };
-        let (title, options, current): (&'static str, Vec<(String, String)>, String) = match kind {
+        let (options, current): (Vec<String>, String) = match kind {
             MenuKind::Subtitles => {
-                let mut options = vec![("Desactivados".to_string(), "off".to_string())];
-                options.extend(tracks.subtitles.iter().map(|code| (language_name(state, code, true), code.clone())));
-                ("Subtítulos", options, tracks.subtitle.clone().unwrap_or_else(|| "off".into()))
+                let options = std::iter::once("off".to_string()).chain(tracks.subtitles.iter().cloned()).collect();
+                (options, tracks.subtitle.clone().unwrap_or_else(|| "off".into()))
             }
-            MenuKind::Audio => {
-                let options = tracks.audios.iter().map(|(code, _)| (language_name(state, code, false), code.clone())).collect();
-                ("Audio", options, tracks.audio.clone())
-            }
+            MenuKind::Audio => (tracks.audios.iter().map(|(code, _)| code.clone()).collect(), tracks.audio.clone()),
             MenuKind::Quality => {
-                let options = QUALITIES.iter().map(|(label, value)| (label.to_string(), value.to_string())).collect();
                 let current = &state.settings.video_quality;
-                let current = if QUALITIES.iter().any(|(_, value)| value == current) { current.clone() } else { "adaptive".into() };
-                ("Calidad", options, current)
+                let current = if QUALITIES.contains(&current.as_str()) { current.clone() } else { "adaptive".into() };
+                (QUALITIES.iter().map(|value| value.to_string()).collect(), current)
             }
         };
-        let selected = options.iter().position(|(_, value)| *value == current).unwrap_or(0);
-        self.menu = Some(Menu { kind, title, options, selected, focus: selected });
+        let selected = options.iter().position(|value| *value == current).unwrap_or(0);
+        self.menu = Some(Menu { kind, options, selected, focus: selected });
     }
 
     fn menu_key(&mut self, key: Key, env: &mut Env) {
@@ -656,7 +652,7 @@ impl PlayerPage {
             Key::Up => menu.focus = menu.focus.saturating_sub(1),
             Key::Down => menu.focus = (menu.focus + 1).min(menu.options.len().saturating_sub(1)),
             Key::Ok => {
-                let (kind, value, changed) = (menu.kind, menu.options[menu.focus].1.clone(), menu.focus != menu.selected);
+                let (kind, value, changed) = (menu.kind, menu.options[menu.focus].clone(), menu.focus != menu.selected);
                 self.menu = None;
                 if changed {
                     self.choose(kind, value, env);
@@ -699,7 +695,7 @@ impl PlayerPage {
     fn title(&self) -> String {
         match &self.card.episode {
             Some(episode) if !episode.number.is_empty() => {
-                format!("{} - E{} - {}", self.card.title, episode.number, episode.name)
+                format!("{} - {} - {}", self.card.title, tr!("E{}", episode.number), episode.name)
             }
             Some(episode) if !episode.name.is_empty() => format!("{} - {}", self.card.title, episode.name),
             _ => self.card.title.clone(),
@@ -724,22 +720,22 @@ impl PlayerPage {
         if let Some(message) = failed {
             match self.stopped_at {
                 Some(at) => {
-                    ui.gfx.text(Font::SemiBold, 28.0, SIDE, BAR_Y - 10.0, "Se detuvo la reproducción", TEXT, None);
-                    let hint = format!("OK para seguir desde {} · Atrás para volver", clock(at));
+                    ui.gfx.text(Font::SemiBold, 28.0, SIDE, BAR_Y - 10.0, t("Playback stopped"), TEXT, None);
+                    let hint = tr!("OK to resume from {} · Back to return", clock(at));
                     ui.gfx.text(Font::Regular, 24.0, SIDE, BAR_Y + 34.0, &hint, MUTED, None);
                 }
                 None => {
-                    ui.gfx.text(Font::SemiBold, 28.0, SIDE, BAR_Y - 10.0, "No se pudo reproducir", TEXT, None);
+                    ui.gfx.text(Font::SemiBold, 28.0, SIDE, BAR_Y - 10.0, t("Couldn’t play this"), TEXT, None);
                     ui.gfx.text(Font::Regular, 24.0, SIDE, BAR_Y + 34.0, message, MUTED, Some(SCREEN_W - 2.0 * SIDE));
-                    ui.gfx.text(Font::Regular, 22.0, SIDE, BAR_Y + 80.0, "Atrás para volver", DIM, None);
+                    ui.gfx.text(Font::Regular, 22.0, SIDE, BAR_Y + 80.0, t("Back to return"), DIM, None);
                 }
             }
             return;
         }
         let status = if self.wanted.from > Duration::from_secs(5) {
-            format!("Continuando desde {}", clock(self.wanted.from))
+            tr!("Resuming from {}", clock(self.wanted.from))
         } else {
-            "Cargando…".to_string()
+            t("Loading…").to_string()
         };
         ui.gfx.text(Font::Regular, 26.0, SIDE, TITLE_Y + 62.0, &status, MUTED.alpha(k), None);
         spinner(ui, SCREEN_W / 2.0, SCREEN_H / 2.0, k);
@@ -881,7 +877,8 @@ impl PlayerPage {
         let row_h = 60.0;
         let visible = menu.options.len().min(6);
         let first = (menu.focus + 1).saturating_sub(visible).min(menu.options.len() - visible);
-        let widest = menu.options.iter().map(|(label, _)| ui.gfx.measure(Font::Regular, 27.0, label)).fold(0.0, f32::max);
+        let labels: Vec<String> = menu.options.iter().map(|value| option_name(menu.kind, value)).collect();
+        let widest = labels.iter().map(|label| ui.gfx.measure(Font::Regular, 27.0, label)).fold(0.0, f32::max);
         let w = (widest + 110.0).clamp(360.0, 560.0);
         let h = 12.0 + 48.0 + visible as f32 * row_h + 12.0;
         let x = (cx - w / 2.0).clamp(PAD, SCREEN_W - PAD - w);
@@ -889,7 +886,8 @@ impl PlayerPage {
         ui.gfx.rect(Rect::new(panel.x, panel.y + 8.0, panel.w, panel.h), 24.0, Color(0.0, 0.0, 0.0, 0.35));
         ui.gfx.rect(panel.inset(-1.0), 25.0, Color(1.0, 1.0, 1.0, 0.10));
         ui.gfx.rect(panel, 24.0, Color(0.141, 0.141, 0.165, 0.96));
-        ui.gfx.text(Font::SemiBold, 20.0, panel.x + 30.0, panel.y + 22.0, &menu.title.to_uppercase(), DIM, None);
+        // the button's name
+        ui.gfx.text(Font::SemiBold, 20.0, panel.x + 30.0, panel.y + 22.0, &control.name(false).to_uppercase(), DIM, None);
         for (slot, index) in (first..first + visible).enumerate() {
             let r = Rect::new(panel.x + 12.0, panel.y + 60.0 + slot as f32 * row_h, panel.w - 24.0, row_h - 4.0);
             let focused = index == menu.focus;
@@ -897,7 +895,7 @@ impl PlayerPage {
                 ui.gfx.rect(r, 14.0, TEXT);
             }
             let ink = if focused { BG } else { TEXT };
-            ui.gfx.text(Font::Regular, 27.0, r.x + 18.0, r.y + 12.0, &menu.options[index].0, ink, Some(r.w - 70.0));
+            ui.gfx.text(Font::Regular, 27.0, r.x + 18.0, r.y + 12.0, &labels[index], ink, Some(r.w - 70.0));
             if index == menu.selected {
                 ui.gfx.icon(Icon::Check, r.x + r.w - 44.0, r.y + 16.0, 24.0, ink);
             }
@@ -923,13 +921,13 @@ impl PlayerPage {
         if let Some(episode) = &self.card.episode {
             let mut facts = Vec::new();
             if episode.season > 0 {
-                facts.push(format!("Temporada {}", episode.season));
+                facts.push(tr!("Season {}", episode.season));
             }
             if !episode.number.is_empty() {
-                facts.push(format!("Episodio {}", episode.number));
+                facts.push(tr!("Episode {}", episode.number));
             }
             if episode.duration_secs > 0 {
-                facts.push(format!("{} min", (episode.duration_secs + 30) / 60));
+                facts.push(tr!("{} min", (episode.duration_secs + 30) / 60));
             }
             ui.gfx.text(Font::SemiBold, 22.0, x, y, &facts.join("  ·  ").to_uppercase(), DIM, Some(width));
             y += 44.0;
@@ -951,10 +949,11 @@ impl PlayerPage {
             self.notice = None;
             return;
         }
-        let w = ui.gfx.measure(Font::Regular, 24.0, text) + 64.0;
+        let text = text.get();
+        let w = ui.gfx.measure(Font::Regular, 24.0, &text) + 64.0;
         let r = Rect::new((SCREEN_W - w) / 2.0, 48.0, w, 64.0);
         ui.gfx.rect(r, 32.0, SURFACE.alpha(0.96));
-        ui.gfx.text(Font::Regular, 24.0, r.x + 32.0, r.y + 17.0, text, TEXT, None);
+        ui.gfx.text(Font::Regular, 24.0, r.x + 32.0, r.y + 17.0, &text, TEXT, None);
     }
 }
 
@@ -970,9 +969,6 @@ impl Page for PlayerPage {
     fn shown(&mut self, env: &mut Env) {
         if self.requested.is_some() || self.playback.is_some() {
             return;
-        }
-        if env.state.account.languages.is_none() {
-            self.send(env.worker, Command::Languages);
         }
         self.previews = env.state.settings.previews;
         self.skip_for = env.state.settings.skip_for as f32;
@@ -1132,7 +1128,7 @@ impl Page for PlayerPage {
 
     fn draw(&mut self, ui: &mut Ui, _state: &State, _focused: bool) {
         if let Some(message) = self.failed.clone() {
-            self.draw_loading(ui, Some(&message), 1.0);
+            self.draw_loading(ui, Some(&message.get()), 1.0);
             return;
         }
         let Some(playback) = self.playback.clone() else {
@@ -1155,7 +1151,7 @@ impl Page for PlayerPage {
                     self.stopped_at = Some(at);
                     self.save(ui.worker, at);
                 }
-                self.failed = Some(message.clone());
+                self.failed = Some(Text::Plain(message.clone()));
                 platform::want_video_window(false);
                 return;
             }
@@ -1361,32 +1357,37 @@ fn max_height(quality: &str) -> u32 {
     quality.trim_end_matches('p').parse().ok().filter(|height| *height < 1080).unwrap_or(1080)
 }
 
-/// A language's name ("Español (América Latina)") from Crunchyroll's lists, else from a few common ones, else its
-/// code.
-fn language_name(state: &State, code: &str, subtitles: bool) -> String {
-    if let Some((audio, subs)) = &state.account.languages {
-        let (first, second) = if subtitles { (subs, audio) } else { (audio, subs) };
-        if let Some((_, name)) = first.iter().chain(second.iter()).find(|(c, _)| c == code) {
-            return name.clone();
-        }
+/// What a menu calls one of its values, in the interface's language.
+fn option_name(kind: MenuKind, value: &str) -> String {
+    match kind {
+        MenuKind::Subtitles if value == "off" => t("Off").into(),
+        MenuKind::Subtitles | MenuKind::Audio => language_name(value),
+        MenuKind::Quality if value == "adaptive" => t("Auto").into(),
+        MenuKind::Quality => value.into(),
     }
+}
+
+/// A language's name in the interface's language ("Spanish (Latin America)"), the region left out where it adds
+/// nothing ("Japanese"); else as Settings name it. Not Crunchyroll's names: each is in its own script, which the
+/// font may not have.
+fn language_name(code: &str) -> String {
     let known = match code {
-        "ja-JP" => "Japonés",
-        "en-US" => "Inglés",
-        "en-IN" => "Inglés (India)",
-        "es-419" => "Español (América Latina)",
-        "es-ES" => "Español (España)",
-        "pt-BR" => "Portugués (Brasil)",
-        "pt-PT" => "Portugués (Portugal)",
-        "fr-FR" => "Francés",
-        "de-DE" => "Alemán",
-        "it-IT" => "Italiano",
-        "ru-RU" => "Ruso",
-        "ar-SA" | "ar-ME" => "Árabe",
-        "hi-IN" => "Hindi",
-        "zh-CN" => "Chino (Mandarín)",
-        "ko-KR" => "Coreano",
-        _ => return code.to_string(),
+        "ja-JP" => t("Japanese"),
+        "en-US" => t("English"),
+        "en-IN" => t("English (India)"),
+        "es-419" => t("Spanish (Latin America)"),
+        "es-ES" => t("Spanish (Spain)"),
+        "pt-BR" => t("Portuguese (Brazil)"),
+        "pt-PT" => t("Portuguese (Portugal)"),
+        "fr-FR" => t("French"),
+        "de-DE" => t("German"),
+        "it-IT" => t("Italian"),
+        "ru-RU" => t("Russian"),
+        "ar-SA" | "ar-ME" => t("Arabic"),
+        "hi-IN" => t("Hindi"),
+        "zh-CN" => t("Chinese (Mandarin)"),
+        "ko-KR" => t("Korean"),
+        _ => return languages::language_name(code),
     };
     known.to_string()
 }

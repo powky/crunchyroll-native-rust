@@ -9,6 +9,7 @@ mod controls;
 mod feed;
 mod grid;
 mod home;
+pub mod i18n;
 mod images;
 mod keyboard;
 mod languages;
@@ -33,6 +34,7 @@ use crunchy_core::model::{Card, Kind};
 use crate::gfx::{Font, Rect, Renderer};
 use crate::platform::{self, Key};
 use alert::{Alert, AlertAction, Choice};
+use i18n::Text;
 use images::Images;
 use settings::Settings;
 use theme::*;
@@ -57,7 +59,7 @@ pub enum Nav {
     SwitchProfile,
     SelectProfile(String),
     Alert(Alert),
-    Toast(String),
+    Toast(Text),
     /// play an episode or movie (from where it was left)
     Play(Card),
 }
@@ -144,7 +146,7 @@ pub struct CrunchyApp {
     /// pages over the screen, the last one shown
     stack: Vec<Box<dyn Page>>,
     alert: Option<Alert>,
-    message: Option<(String, Instant)>,
+    message: Option<(Text, Instant)>,
     last: Instant,
     started: Instant,
     /// when a profile was chosen, to log how long the home's first row took
@@ -157,6 +159,8 @@ impl CrunchyApp {
         let dir = platform::data_dir();
         eprintln!("crunchy: data in {}", dir.display());
         let settings = Settings::load(&dir);
+        // before the first frame, which is drawn in it
+        i18n::apply(&settings.ui_language);
         let (width, height) = settings.surface_size();
         platform::set_surface_size(width, height);
         let worker = Worker::start(dir);
@@ -191,8 +195,8 @@ impl CrunchyApp {
         app
     }
 
-    fn toast(&mut self, message: impl Into<String>) {
-        self.message = Some((message.into(), Instant::now()));
+    fn toast(&mut self, message: Text) {
+        self.message = Some((message, Instant::now()));
     }
 
     fn open_main(&mut self) {
@@ -513,10 +517,11 @@ impl platform::App for CrunchyApp {
         }
         if let Some((message, at)) = &self.message {
             if now.duration_since(*at).as_secs_f32() < 3.5 {
-                let w = (ui.gfx.measure(Font::Regular, 24.0, message) + 64.0).min(1920.0 - 96.0);
+                let message = message.get();
+                let w = (ui.gfx.measure(Font::Regular, 24.0, &message) + 64.0).min(1920.0 - 96.0);
                 let r = Rect::new((1920.0 - w) / 2.0, 1080.0 - 120.0, w, 64.0);
                 ui.gfx.rect(r, 32.0, SURFACE.alpha(0.96));
-                ui.gfx.text(Font::Regular, 24.0, r.x + 32.0, r.y + 17.0, message, TEXT, Some(r.w - 64.0));
+                ui.gfx.text(Font::Regular, 24.0, r.x + 32.0, r.y + 17.0, &message, TEXT, Some(r.w - 64.0));
             } else {
                 self.message = None;
             }

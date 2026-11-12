@@ -4,6 +4,7 @@
 use crate::gfx::{Color, Font, Icon, Rect, Renderer};
 use crate::platform::Key;
 
+use super::i18n::t;
 use super::theme::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -174,14 +175,14 @@ impl Keyboard {
                     Cap::Backspace => {
                         gfx.icon_centered(Icon::Back, cx, cy, 34.0, ink);
                     }
-                    Cap::Space => label(gfx, cx, cy, "espacio", ink),
+                    Cap::Space => label(gfx, cx, cy, t("space"), ink),
                     Cap::Clear => gfx.icon_centered(Icon::Xmark, cx, cy, 30.0, ink),
                     Cap::Shift => {
                         let ink = if self.shift && !focus { ACCENT } else { ink };
-                        label(gfx, cx, cy, "Mayús", ink);
+                        label(gfx, cx, cy, t("Shift"), ink);
                     }
                     Cap::Symbols => label(gfx, cx, cy, if self.symbols { "abc" } else { "#+=" }, ink),
-                    Cap::Done => label(gfx, cx, cy, "Buscar", ink),
+                    Cap::Done => label(gfx, cx, cy, t("Search"), ink),
                 }
             }
         }

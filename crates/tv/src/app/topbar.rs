@@ -1,5 +1,5 @@
 //! The top bar: the logo, a centred track of tabs (the search tab last, as an icon), the clock and the profile's
-//! avatar, whose menu has Ajustes and Salir. Left/Right move along it, OK switches the page.
+//! avatar, whose menu has Settings and Exit. Left/Right move along it, OK switches the page.
 //!
 //! Styled after PlxNative's tab bar (the tvOS idiom): the tabs are 60-pixel pills with 28-pixel labels set in a
 //! recessed near-black track, the current one on a light plate, the focused one solid white; the avatar sits in a
@@ -8,6 +8,7 @@
 use crate::gfx::{Color, Font, Icon, Rect};
 use crate::platform::Key;
 
+use super::i18n::{self, Text, t, tr};
 use super::signin::AVATAR_PICTURE;
 use super::theme::*;
 use super::ui::{Look, Ui};
@@ -31,14 +32,14 @@ impl Tab {
 
     pub fn label(self) -> &'static str {
         match self {
-            Tab::Home => "Inicio",
-            Tab::Simulcast => "Simulcast",
-            Tab::Series => "Series",
-            Tab::Movies => "Películas",
-            Tab::Music => "Música",
-            Tab::MyList => "Mi Lista",
-            Tab::Search => "Buscar",
-            Tab::Settings => "Ajustes",
+            Tab::Home => t("Home"),
+            Tab::Simulcast => t("Simulcast"),
+            Tab::Series => t("Series"),
+            Tab::Movies => t("Movies"),
+            Tab::Music => t("Music"),
+            Tab::MyList => t("My List"),
+            Tab::Search => t("Search"),
+            Tab::Settings => t("Settings"),
         }
     }
 
@@ -73,8 +74,8 @@ pub enum BarNav {
     Nav(Nav),
 }
 
-/// The avatar menu: icon, label, tab it opens (`None` is Salir).
-const MENU: [(Icon, &str, Option<Tab>); 2] = [(Icon::Gear, "Ajustes", Some(Tab::Settings)), (Icon::Power, "Salir", None)];
+/// The avatar menu: icon and the tab it opens (`None` is Exit).
+const MENU: [(Icon, Option<Tab>); 2] = [(Icon::Gear, Some(Tab::Settings)), (Icon::Power, None)];
 
 pub struct TopBar {
     /// the tab shown
@@ -155,12 +156,12 @@ impl TopBar {
                 Key::Down => *focus = (*focus + 1).min(MENU.len() - 1),
                 Key::Back => self.menu = None,
                 Key::Ok => {
-                    let (_, _, tab) = MENU[*focus];
+                    let (_, tab) = MENU[*focus];
                     self.menu = None;
                     return match tab {
                         Some(tab) => BarNav::Show(tab),
                         None => BarNav::Nav(Nav::Alert(super::alert::Alert::new(
-                            "¿Salir de la aplicación?",
+                            Text::Key("Exit the app?"),
                             None,
                             super::alert::AlertAction::Quit,
                         ))),
@@ -255,7 +256,8 @@ impl TopBar {
             let panel = Rect::new(1872.0 - 324.0, BAND_Y + BAND_H + 12.0, 324.0, 24.0 + 8.0 + MENU.len() as f32 * 68.0 - 4.0);
             ui.gfx.rect(panel, 24.0, Color(0.10, 0.10, 0.12, 0.97));
             ui.gfx.ring(panel, 24.0, 1.5, TRACK_RIM);
-            for (index, (icon, label, _)) in MENU.iter().enumerate() {
+            for (index, (icon, tab)) in MENU.iter().enumerate() {
+                let label = tab.map_or(t("Exit"), Tab::label);
                 let r = Rect::new(panel.x + 16.0, panel.y + 16.0 + index as f32 * 68.0, panel.w - 32.0, 64.0);
                 let look = index == menu_focus;
                 let r = if look { r.scaled(1.03) } else { r };
@@ -290,7 +292,7 @@ fn tab_colors(look: Look) -> (Option<Color>, Color) {
     }
 }
 
-/// The time now on the TV's clock and time zone, and the 12-hour suffix ("p. m.") when there is one.
+/// The time now on the TV's clock and time zone, and the 12-hour suffix ("PM") when there is one.
 pub fn clock_text(h24: bool) -> (String, &'static str) {
     let (hour, minute) = local_time();
     if h24 {
@@ -300,7 +302,7 @@ pub fn clock_text(h24: bool) -> (String, &'static str) {
             0 => 12,
             h => h,
         };
-        (format!("{h}:{minute:02}"), if hour < 12 { "a. m." } else { "p. m." })
+        (format!("{h}:{minute:02}"), if hour < 12 { t("AM") } else { t("PM") })
     }
 }
 
@@ -315,7 +317,7 @@ pub fn local_date() -> (i32, u32, u32) {
     (tm.0, tm.1, tm.2)
 }
 
-/// "04/10/25, 7:30 p. m" for an RFC 3339 time, in the TV's time zone (always 12-hour, like the web app's simulcast).
+/// "10/04/25, 7:30 PM" for an RFC 3339 time, in the TV's time zone (always 12-hour, like the web app's simulcast).
 pub fn short_datetime(iso: &str) -> Option<String> {
     let secs = parse_iso(iso)?;
     let (year, month, day, hour, minute) = local(Some(secs));
@@ -323,8 +325,8 @@ pub fn short_datetime(iso: &str) -> Option<String> {
         0 => 12,
         h => h,
     };
-    let suffix = if hour < 12 { "a. m" } else { "p. m" };
-    Some(format!("{day:02}/{month:02}/{:02}, {h}:{minute:02} {suffix}", year % 100))
+    let (date, minute) = (i18n::short_date(year, month, day), format!("{minute:02}"));
+    Some(if hour < 12 { tr!("{}, {}:{} AM", date, h, minute) } else { tr!("{}, {}:{} PM", date, h, minute) })
 }
 
 /// Seconds since 1970 of "2026-10-19T13:00:00.000Z" (UTC).
