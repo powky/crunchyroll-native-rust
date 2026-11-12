@@ -32,6 +32,8 @@ pub struct Settings {
     pub previews: bool,
     /// seconds "Saltar intro" (and the like) shows on its own; after them, it shows with the controls
     pub skip_for: u32,
+    /// the player's controls drawn smaller
+    pub small_controls: bool,
     /// "continue watching" first on the home, else second
     pub continue_first: bool,
     /// the lite interface drops Mi Lista's poster and genres
@@ -55,6 +57,7 @@ impl Default for Settings {
             subtitles: "hardsub".into(),
             previews: true,
             skip_for: 10,
+            small_controls: false,
             continue_first: false,
             lite: false,
             clock_24h: true,
@@ -105,6 +108,7 @@ enum Row {
     Subtitles,
     Previews,
     SkipFor,
+    ControlsSize,
     FirstRow,
     Interface,
     Clock,
@@ -124,6 +128,7 @@ impl Row {
             Row::Subtitles => t("Subtitles"),
             Row::Previews => t("Previews"),
             Row::SkipFor => t("Show “Skip intro”"),
+            Row::ControlsSize => t("Controls size"),
             Row::FirstRow => t("First row"),
             Row::Interface => t("Interface"),
             Row::Clock => t("Clock"),
@@ -143,6 +148,7 @@ impl Row {
             Row::Subtitles | Row::SubtitleLanguage => Icon::Bubble,
             Row::Previews => Icon::Photo,
             Row::SkipFor => Icon::Skip,
+            Row::ControlsSize => Icon::TextSize,
             Row::FirstRow => Icon::Rows,
             Row::Interface => Icon::Sparkles,
             Row::Clock => Icon::Clock,
@@ -164,7 +170,7 @@ const CONTENT_LANGUAGES: [&str; 11] =
 
 fn sections() -> Vec<(&'static str, Vec<Row>)> {
     vec![
-        (t("PLAYBACK"), vec![Row::Quality, Row::Subtitles, Row::Previews, Row::SkipFor]),
+        (t("PLAYBACK"), vec![Row::Quality, Row::Subtitles, Row::Previews, Row::SkipFor, Row::ControlsSize]),
         (t("HOME"), vec![Row::FirstRow, Row::Interface, Row::Clock]),
         (t("DISPLAY"), vec![Row::Resolution]),
         (
@@ -194,6 +200,7 @@ fn options(row: Row, state: &State) -> Vec<(String, String)> {
         Row::SkipFor => [5, 10, 15, 30].iter().map(|seconds| (seconds.to_string(), tr!("{} seconds", seconds))).collect(),
         Row::FirstRow => pairs(&[("suggestions", t("Suggestions")), ("continue", t("Continue watching"))]),
         Row::Interface => pairs(&[("full", t("Full")), ("lite", t("Lite"))]),
+        Row::ControlsSize => pairs(&[("normal", t("Normal")), ("small", t("Small"))]),
         Row::Clock => pairs(&[("24", t("24-hour")), ("12", t("12-hour (AM / PM)"))]),
         Row::Resolution => pairs(&[("1080p", t("1080p (recommended)")), ("1440p", "1440p"), ("2160p", "4K (2160p)")]),
         Row::TabShown(_) => pairs(&[("show", t("Show")), ("hide", t("Hide"))]),
@@ -229,6 +236,7 @@ fn value(row: Row, state: &State) -> Option<String> {
         Row::Subtitles => s.subtitles.clone(),
         Row::Previews => if s.previews { "yes" } else { "no" }.into(),
         Row::SkipFor => s.skip_for.to_string(),
+        Row::ControlsSize => if s.small_controls { "small" } else { "normal" }.into(),
         Row::FirstRow => if s.continue_first { "continue" } else { "suggestions" }.into(),
         Row::Interface => if s.lite { "lite" } else { "full" }.into(),
         Row::Clock => if s.clock_24h { "24" } else { "12" }.into(),
@@ -283,6 +291,7 @@ impl SettingsPage {
             Row::Subtitles => s.subtitles = chosen.into(),
             Row::Previews => s.previews = chosen == "yes",
             Row::SkipFor => s.skip_for = chosen.parse().unwrap_or(10),
+            Row::ControlsSize => s.small_controls = chosen == "small",
             Row::FirstRow => s.continue_first = chosen == "continue",
             Row::Interface => s.lite = chosen == "lite",
             Row::Clock => s.clock_24h = chosen == "24",

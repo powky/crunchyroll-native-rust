@@ -632,6 +632,11 @@ impl Renderer {
         self.text.measure(font, size, text)
     }
 
+    /// How far a line of `font` at `size` reaches above its baseline: `text` draws at `y` + this.
+    pub fn ascent(&self, font: Font, size: f32) -> f32 {
+        self.text.ascent(font, size)
+    }
+
     /// Uploads a decoded picture (RGBA, top row first).
     /// A texture with room for a picture, filled a few rows at a time with [`Renderer::upload_rows`].
     pub fn create_texture(&mut self, width: u32, height: u32, format: PixelFormat) -> Result<Texture> {

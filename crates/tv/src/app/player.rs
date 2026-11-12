@@ -59,10 +59,11 @@ const ROW_Y: f32 = 966.0;
 const BAR_Y: f32 = 921.0;
 const BAR_H: f32 = 9.0;
 const TITLE_Y: f32 = 826.0;
-const TIMES_Y: f32 = 848.0;
 /// Where the fade under the controls starts (23rem above the bottom).
 const FADE_TOP: f32 = 528.0;
 const SKIP_H: f32 = 84.0;
+/// The controls' size with Settings' smaller ones (heights shrink towards the bottom edge).
+const SMALL_CONTROLS: f32 = 0.8;
 /// How long the still takes to fade away once the video shows.
 const STILL_FADE: Duration = Duration::from_millis(600);
 
@@ -185,6 +186,8 @@ pub struct PlayerPage {
     skip_for: f32,
     /// how far the skip button has faded in
     skip_shown: f32,
+    /// the controls' size: 1, or smaller (the setting)
+    scale: f32,
     /// the profile's thumb on the episode: "up", "down" or none
     rating: Option<String>,
     saved_at: Instant,
@@ -247,6 +250,7 @@ impl PlayerPage {
             skip_alone: None,
             skip_for: 10.0,
             skip_shown: 0.0,
+            scale: 1.0,
             rating: None,
             saved_at: now,
             ended_at: None,
@@ -511,21 +515,32 @@ impl PlayerPage {
         self.groups().concat()
     }
 
+    /// A size in the controls, as big as Settings want them.
+    fn size(&self, value: f32) -> f32 {
+        value * self.scale
+    }
+
+    /// A height in the controls' layout, nearer the bottom edge when they're smaller.
+    fn y(&self, value: f32) -> f32 {
+        SCREEN_H - (SCREEN_H - value) * self.scale
+    }
+
     /// Each button's centre along the row.
     fn layout(&self) -> Vec<(Control, f32)> {
         let [left, middle, right] = self.groups();
-        let step = BUTTON + GAP;
+        let (button, gap) = (self.size(BUTTON), self.size(GAP));
+        let step = button + gap;
         let mut out = Vec::new();
         for (index, control) in left.iter().enumerate() {
-            out.push((*control, SIDE + BUTTON / 2.0 + index as f32 * step));
+            out.push((*control, SIDE + button / 2.0 + index as f32 * step));
         }
-        let width = middle.len() as f32 * step - GAP;
+        let width = middle.len() as f32 * step - gap;
         for (index, control) in middle.iter().enumerate() {
-            out.push((*control, (SCREEN_W - width) / 2.0 + BUTTON / 2.0 + index as f32 * step));
+            out.push((*control, (SCREEN_W - width) / 2.0 + button / 2.0 + index as f32 * step));
         }
         for (index, control) in right.iter().enumerate() {
             let from_end = (right.len() - 1 - index) as f32;
-            out.push((*control, SCREEN_W - SIDE - BUTTON / 2.0 - from_end * step));
+            out.push((*control, SCREEN_W - SIDE - button / 2.0 - from_end * step));
         }
         out
     }
@@ -715,7 +730,7 @@ impl PlayerPage {
             let zoom = 1.0 + 0.05 * (1.0 - (1.0 - t) * (1.0 - t));
             ui.gfx.image(&texture, screen.scaled(zoom), 0.0, 0.62 * k);
         }
-        fade_bottom(ui, 0.85, k);
+        fade_bottom(ui, FADE_TOP, 0.85, k);
         ui.gfx.text(Font::SemiBold, 42.0, SIDE, TITLE_Y, &self.title(), TEXT.alpha(k), Some(SCREEN_W - 2.0 * SIDE));
         if let Some(message) = failed {
             match self.stopped_at {
@@ -764,43 +779,51 @@ impl PlayerPage {
     }
 
     fn draw_controls(&self, ui: &mut Ui, position: Duration, duration: Duration, paused: bool, k: f32, thumb: Option<crate::gfx::Texture>) {
-        fade_bottom(ui, 0.8, k);
+        fade_bottom(ui, self.y(FADE_TOP), 0.8, k);
         let shown = self.jump.map_or(position, |jump| jump.to);
         let times = format!("{} / {}", clock(shown), clock(duration));
-        let times_w = ui.gfx.measure(Font::Regular, 24.0, &times);
-        let title_w = SCREEN_W - 2.0 * SIDE - times_w - 48.0;
+        let (title_size, times_size) = (self.size(42.0), self.size(24.0));
+        let times_w = ui.gfx.measure(Font::Regular, times_size, &times);
+        let title_w = SCREEN_W - 2.0 * SIDE - times_w - self.size(48.0);
         let scrubbing = self.focus == Focus::Bar && self.jump.is_some();
         // the time over the knob takes the title's place while the bar is moved
+        let title_y = self.y(TITLE_Y);
         if !scrubbing {
-            ui.gfx.text(Font::SemiBold, 42.0, SIDE, TITLE_Y, &self.title(), TEXT.alpha(k), Some(title_w));
+            ui.gfx.text(Font::SemiBold, title_size, SIDE, title_y, &self.title(), TEXT.alpha(k), Some(title_w));
         }
-        ui.gfx.text(Font::Regular, 24.0, SCREEN_W - SIDE - times_w, TIMES_Y, &times, Color(0.8, 0.8, 0.8, k), None);
+        // the times stand on the title's baseline
+        let baseline = title_y + ui.gfx.ascent(Font::SemiBold, title_size);
+        let times_y = baseline - ui.gfx.ascent(Font::Regular, times_size);
+        ui.gfx.text(Font::Regular, times_size, SCREEN_W - SIDE - times_w, times_y, &times, Color(0.8, 0.8, 0.8, k), None);
 
         // the bar: white over a translucent track
+        let (bar_y, bar_h) = (self.y(BAR_Y), self.size(BAR_H));
         let width = SCREEN_W - 2.0 * SIDE;
         let share = if duration.is_zero() { 0.0 } else { (shown.as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0) };
-        ui.gfx.rect(Rect::new(SIDE, BAR_Y, width, BAR_H), BAR_H / 2.0, Color(1.0, 1.0, 1.0, 0.3 * k));
-        ui.gfx.rect(Rect::new(SIDE, BAR_Y, (width * share).max(BAR_H), BAR_H), BAR_H / 2.0, Color(0.96, 0.96, 0.97, 0.85 * k));
+        ui.gfx.rect(Rect::new(SIDE, bar_y, width, bar_h), bar_h / 2.0, Color(1.0, 1.0, 1.0, 0.3 * k));
+        ui.gfx.rect(Rect::new(SIDE, bar_y, (width * share).max(bar_h), bar_h), bar_h / 2.0, Color(0.96, 0.96, 0.97, 0.85 * k));
         let knob_x = SIDE + width * share;
         if self.focus == Focus::Bar && self.controls {
-            let d = if self.jump.is_some() { 40.0 } else { 26.0 };
-            let cy = BAR_Y + BAR_H / 2.0;
+            let d = self.size(if self.jump.is_some() { 40.0 } else { 26.0 });
+            let cy = bar_y + bar_h / 2.0;
             ui.gfx.rect(Rect::new(knob_x - d / 2.0, cy - d / 2.0 + 3.0, d, d), d / 2.0, Color(0.0, 0.0, 0.0, 0.35 * k));
             ui.gfx.rect(Rect::new(knob_x - d / 2.0, cy - d / 2.0, d, d), d / 2.0, Color(1.0, 1.0, 1.0, k));
             if scrubbing && let Some(texture) = thumb {
-                let x = (knob_x - THUMB_W / 2.0).clamp(SIDE, SCREEN_W - SIDE - THUMB_W);
-                let r = Rect::new(x, BAR_Y - 86.0 - THUMB_H, THUMB_W, THUMB_H);
+                let (w, h) = (self.size(THUMB_W), self.size(THUMB_H));
+                let x = (knob_x - w / 2.0).clamp(SIDE, SCREEN_W - SIDE - w);
+                let r = Rect::new(x, bar_y - self.size(86.0) - h, w, h);
                 ui.gfx.rect(Rect::new(r.x - 2.0, r.y + 4.0, r.w + 4.0, r.h + 6.0), 16.0, Color(0.0, 0.0, 0.0, 0.35 * k));
                 ui.gfx.image(&texture, r, 12.0, k);
                 ui.gfx.ring(r, 12.0, 1.5, Color(1.0, 1.0, 1.0, 0.30 * k));
             }
             if scrubbing {
                 let label = clock(shown);
-                let w = ui.gfx.measure(Font::SemiBold, 26.0, &label) + 36.0;
+                let size = self.size(26.0);
+                let w = ui.gfx.measure(Font::SemiBold, size, &label) + self.size(36.0);
                 let x = (knob_x - w / 2.0).clamp(SIDE, SCREEN_W - SIDE - w);
-                let r = Rect::new(x, BAR_Y - 74.0, w, 50.0);
-                ui.gfx.rect(r, 25.0, Color(0.141, 0.141, 0.165, 0.92 * k));
-                ui.gfx.text(Font::SemiBold, 26.0, r.x + 18.0, r.y + 9.0, &label, TEXT.alpha(k), None);
+                let r = Rect::new(x, bar_y - self.size(74.0), w, self.size(50.0));
+                ui.gfx.rect(r, r.h / 2.0, Color(0.141, 0.141, 0.165, 0.92 * k));
+                ui.gfx.text(Font::SemiBold, size, r.x + self.size(18.0), r.y + self.size(9.0), &label, TEXT.alpha(k), None);
             }
         }
 
@@ -822,14 +845,17 @@ impl PlayerPage {
                 Control::Audio => (Icon::Speaker, false),
                 Control::Quality => (Icon::Gear, false),
             };
-            draw_button(ui, cx, icon, focused, selected, k);
+            let (row_y, button) = (self.y(ROW_Y), self.size(BUTTON));
+            draw_button(ui, cx, row_y + button / 2.0, button, icon, focused, selected, k);
             // its name, like tvOS: under it once the focus rests there
             if focused && self.focus_at.elapsed() >= NAME_AFTER && self.menu.is_none() {
                 let name = control.name(paused);
-                let w = ui.gfx.measure(Font::SemiBold, 20.0, name);
+                let size = self.size(20.0);
+                let w = ui.gfx.measure(Font::SemiBold, size, name);
                 let x = (cx - w / 2.0).clamp(SIDE - 20.0, SCREEN_W - SIDE + 20.0 - w);
-                ui.gfx.text(Font::SemiBold, 20.0, x + 1.0, ROW_Y + BUTTON + 8.0, name, Color(0.0, 0.0, 0.0, 0.6 * k), None);
-                ui.gfx.text(Font::SemiBold, 20.0, x, ROW_Y + BUTTON + 7.0, name, TEXT.alpha(0.92 * k), None);
+                let y = row_y + button + self.size(7.0);
+                ui.gfx.text(Font::SemiBold, size, x + 1.0, y + 1.0, name, Color(0.0, 0.0, 0.0, 0.6 * k), None);
+                ui.gfx.text(Font::SemiBold, size, x, y, name, TEXT.alpha(0.92 * k), None);
             }
         }
     }
@@ -850,7 +876,7 @@ impl PlayerPage {
         let w = 44.0 + 32.0 + 14.0 + ui.gfx.measure(Font::Bold, 30.0, label) + 44.0;
         // over the bottom edge, or above the title while the controls show
         let low = SCREEN_H - 60.0 - SKIP_H;
-        let high = TITLE_Y - 36.0 - SKIP_H;
+        let high = self.y(TITLE_Y) - 36.0 - SKIP_H;
         let y = low + (high - low) * self.shown;
         let focused = self.focus == Focus::Skip;
         let r = Rect::new(SCREEN_W - PAD - w, y, w, SKIP_H);
@@ -882,7 +908,7 @@ impl PlayerPage {
         let w = (widest + 110.0).clamp(360.0, 560.0);
         let h = 12.0 + 48.0 + visible as f32 * row_h + 12.0;
         let x = (cx - w / 2.0).clamp(PAD, SCREEN_W - PAD - w);
-        let panel = Rect::new(x, ROW_Y - 20.0 - h, w, h);
+        let panel = Rect::new(x, self.y(ROW_Y) - 20.0 - h, w, h);
         ui.gfx.rect(Rect::new(panel.x, panel.y + 8.0, panel.w, panel.h), 24.0, Color(0.0, 0.0, 0.0, 0.35));
         ui.gfx.rect(panel.inset(-1.0), 25.0, Color(1.0, 1.0, 1.0, 0.10));
         ui.gfx.rect(panel, 24.0, Color(0.141, 0.141, 0.165, 0.96));
@@ -972,6 +998,7 @@ impl Page for PlayerPage {
         }
         self.previews = env.state.settings.previews;
         self.skip_for = env.state.settings.skip_for as f32;
+        self.scale = if env.state.settings.small_controls { SMALL_CONTROLS } else { 1.0 };
         let profile = env.state.account.profile();
         self.wanted.audio = env.state.account.audio();
         self.wanted.subtitles = profile.map(|profile| profile.subtitle_language.clone()).filter(|s| !s.is_empty());
@@ -1001,7 +1028,11 @@ impl Page for PlayerPage {
                 self.failed = Some(message.clone());
                 platform::want_video_window(false);
             }
-            Event::SkipEvents(id, events) if *id == self.skips_for => self.skips = events.clone(),
+            Event::SkipEvents(id, events) if *id == self.skips_for => {
+                let parts: Vec<String> = events.iter().map(|e| format!("{} {:.0}-{:.0} s", e.kind, e.start, e.end)).collect();
+                eprintln!("crunchy: skip events: {}", parts.join(", "));
+                self.skips = events.clone();
+            }
             Event::Bif { key, times } if self.thumbs_asked.as_ref() == Some(key) => {
                 self.thumbs = Some((key.clone(), times.clone()));
             }
@@ -1308,10 +1339,10 @@ impl Page for PlayerPage {
     }
 }
 
-/// A round button on the row, centred on `cx`: glass, or white with a dark icon when focused.
-fn draw_button(ui: &mut Ui, cx: f32, icon: Icon, focused: bool, selected: bool, k: f32) {
-    let cy = ROW_Y + BUTTON / 2.0;
-    let d = if focused { BUTTON * 1.08 } else { BUTTON };
+/// A round button `button` wide, centred on (`cx`, `cy`): glass, or white with a dark icon when focused.
+#[allow(clippy::too_many_arguments)]
+fn draw_button(ui: &mut Ui, cx: f32, cy: f32, button: f32, icon: Icon, focused: bool, selected: bool, k: f32) {
+    let d = if focused { button * 1.08 } else { button };
     let (fill, ink) = if focused {
         (TEXT.alpha(k), BG.alpha(k))
     } else if selected {
@@ -1323,7 +1354,6 @@ fn draw_button(ui: &mut Ui, cx: f32, icon: Icon, focused: bool, selected: bool, 
     ui.gfx.icon_centered(icon, cx, cy, d * 0.42, ink);
 }
 
-/// The fade under the controls: clear, to 42% black at 40% of its height, to `darkest` at the bottom.
 /// A ring of dots, one bright and the ones behind it dimmer, going round (the TV's own "loading").
 fn spinner(ui: &mut Ui, cx: f32, cy: f32, k: f32) {
     const DOTS: usize = 12;
@@ -1337,11 +1367,13 @@ fn spinner(ui: &mut Ui, cx: f32, cy: f32, k: f32) {
     }
 }
 
-fn fade_bottom(ui: &mut Ui, darkest: f32, k: f32) {
+/// The fade under the controls, from `top` down: clear, to 42% black at 40% of its height, to `darkest` at the bottom.
+fn fade_bottom(ui: &mut Ui, top: f32, darkest: f32, k: f32) {
     // the two stretches meet on a whole pixel: overlapping, they'd draw a darker line
-    let split = FADE_TOP + ((SCREEN_H - FADE_TOP) * 0.4).round();
+    let top = top.round();
+    let split = top + ((SCREEN_H - top) * 0.4).round();
     let middle = Color(0.0, 0.0, 0.0, 0.42 * k);
-    ui.gfx.gradient(Rect::new(0.0, FADE_TOP, SCREEN_W, split - FADE_TOP), Color(0.0, 0.0, 0.0, 0.0), middle, true);
+    ui.gfx.gradient(Rect::new(0.0, top, SCREEN_W, split - top), Color(0.0, 0.0, 0.0, 0.0), middle, true);
     ui.gfx.gradient(Rect::new(0.0, split, SCREEN_W, SCREEN_H - split), middle, Color(0.0, 0.0, 0.0, darkest * k), true);
 }
 
