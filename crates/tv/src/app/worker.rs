@@ -226,7 +226,7 @@ impl Worker {
                         tokio::spawn(async move {
                             // the detailed log: each request, how long it took, how it ended
                             let asked = crunchy_player::debug().then(|| {
-                                let mut what = format!("{command:?}");
+                                let mut what = without_queries(&format!("{command:?}"));
                                 what.truncate(what.char_indices().nth(160).map_or(what.len(), |(at, _)| at));
                                 (what, std::time::Instant::now())
                             });
@@ -407,6 +407,27 @@ async fn send_profiles(shared: &Shared) -> Result<()> {
 async fn forget_profile(shared: &Shared) {
     *shared.ctx.lock().await = None;
     shared.heroes_asked.lock().await.clear();
+}
+
+/// `text` with every link's query cut off: signed links (seek thumbnails, pictures) carry access keys in it.
+fn without_queries(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_query = false;
+    for c in text.chars() {
+        match c {
+            '?' if !in_query => {
+                in_query = true;
+                out.push_str("?…");
+            }
+            '"' | ' ' | ',' if in_query => {
+                in_query = false;
+                out.push(c);
+            }
+            _ if in_query => {}
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 async fn handle(shared: &Arc<Shared>, command: Command) -> Result<()> {
@@ -892,6 +913,12 @@ fn rgb565_dithered(rgb: &image::RgbImage) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn links_lose_their_queries() {
+        let text = r#"Bif { key: "G1", url: "https://x/a.bif?Policy=abc&Signature=def" }"#;
+        assert_eq!(super::without_queries(text), r#"Bif { key: "G1", url: "https://x/a.bif?…" }"#);
+    }
+
     use super::Bif;
 
     /// A BIF with `frames` (timestamp, bytes), 10-second units, laid out as Roku's spec has it.
