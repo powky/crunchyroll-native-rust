@@ -92,7 +92,7 @@ home screen and 136 MB for the web app plus 59 MB for its service
 
 ## Install
 
-1. Download `com.crunchyroll.webos.native_1.0.2_arm.ipk` from the
+1. Download `com.crunchyroll.webos.native_1.0.3_arm.ipk` from the
    [latest release](https://github.com/powky/crunchyroll-native-rust/releases/latest).
 2. Install it with one of:
    - [webOS Dev Manager](https://github.com/webosbrew/dev-manager-desktop) (Developer Mode or rooted): add the TV, then
@@ -100,11 +100,11 @@ home screen and 136 MB for the web app plus 59 MB for its service
    - The [webOS CLI](https://webostv.developer.lge.com/develop/tools/cli-installation) with Developer Mode:
      ```sh
      ares-setup-device                       # once: add the TV
-     ares-install --device <tv> com.crunchyroll.webos.native_1.0.2_arm.ipk
+     ares-install --device <tv> com.crunchyroll.webos.native_1.0.3_arm.ipk
      ```
    - A rooted TV over ssh:
      ```sh
-     scp com.crunchyroll.webos.native_1.0.2_arm.ipk root@<tv>:/tmp/crunchy.ipk
+     scp com.crunchyroll.webos.native_1.0.3_arm.ipk root@<tv>:/tmp/crunchy.ipk
      ssh root@<tv> "luna-send -n 1 luna://com.webos.appInstallService/dev/install '{\"id\":\"com.ares.defaultName\",\"ipkUrl\":\"/tmp/crunchy.ipk\",\"subscribe\":true}'"
      ```
 3. Open **Crunchy** from the launcher, go to **crunchyroll.com/activate** on a phone or computer and enter the code
@@ -152,14 +152,19 @@ video gets the 3840×2160 plane ([LG: app resolution](https://webostv.developer.
 and "webOS TV does not support UHD resolution for web apps" in the
 [appinfo reference](https://webostv.developer.lge.com/develop/references/appinfo-json)). The web engine renders at 2×,
 but the TV scales that back down to 1080p before showing it. Crunchy draws 1080p directly, pixel for pixel; Settings →
-Pantalla → Resolución de la interfaz can render at 1440p or 4K like the web engine does, at a GPU cost and with no
-gain in sharpness.
+Display → Interface resolution can render at 1440p or 4K like the web engine does, at a GPU cost and with no gain in
+sharpness.
 
 **Is the video 4K?** Crunchyroll streams top out at 1080p on TVs. Crunchy always picks the best 1080p rendition and
 the TV's video plane upscales it to the panel, as with any other app.
 
 **Does it download or record anything?** No. It plays what your account can play, through the TV's own DRM, like the
 official apps.
+
+**Something went wrong. How do I report it?** Turn on Settings → Advanced → Detailed log, make it happen again, then
+attach `crunchy.log` (and `crunchy.log.1`, the run before) from
+`/media/developer/apps/usr/palm/data/com.crunchyroll.webos.native/` to an
+[issue](https://github.com/powky/crunchyroll-native-rust/issues). The log never holds your password or tokens.
 
 ## Credits
 
