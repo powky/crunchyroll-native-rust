@@ -1166,10 +1166,13 @@ impl Page for PlayerPage {
             Focus::Bar => match key {
                 Key::Left => self.jump(&playback, false),
                 Key::Right => self.jump(&playback, true),
-                Key::Ok => match self.jump.take() {
-                    Some(jump) => playback.seek(jump.to),
-                    None => self.toggle(&playback),
-                },
+                // OK on the bar goes where the knob was moved to, at once; otherwise it does nothing (play/pause is
+                // the button below)
+                Key::Ok => {
+                    if let Some(jump) = self.jump.take() {
+                        playback.seek(jump.to);
+                    }
+                }
                 Key::Up if self.skip_active.is_some() => self.set_focus(Focus::Skip),
                 // nothing above the bar to go to: Up puts the controls away
                 Key::Up => self.controls = false,
