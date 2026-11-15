@@ -38,6 +38,7 @@ const HERO_DAYS: u64 = 14;
 /// Shows whose hero facts are kept on disk at most.
 const HERO_MAX: usize = 1500;
 
+#[derive(Debug)]
 pub enum Command {
     Start,
     RequestCode,
@@ -223,7 +224,18 @@ impl Worker {
                     while let Some(command) = receiver.recv().await {
                         let shared = shared.clone();
                         tokio::spawn(async move {
-                            if let Err(error) = handle(&shared, command).await {
+                            // the detailed log: each request, how long it took, how it ended
+                            let asked = crunchy_player::debug().then(|| {
+                                let mut what = format!("{command:?}");
+                                what.truncate(what.char_indices().nth(160).map_or(what.len(), |(at, _)| at));
+                                (what, std::time::Instant::now())
+                            });
+                            let result = handle(&shared, command).await;
+                            if let Some((what, at)) = asked {
+                                let outcome = result.as_ref().map_or_else(|error| format!("failed: {error:#}"), |_| "done".into());
+                                crunchy_player::debug_log!("worker: {what} {outcome} in {:?}", at.elapsed());
+                            }
+                            if let Err(error) = result {
                                 eprintln!("crunchy: {error:#}");
                                 let _ = shared.events.send(Event::Error(short_error(&error)));
                             }

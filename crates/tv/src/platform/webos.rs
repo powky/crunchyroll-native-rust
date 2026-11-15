@@ -406,6 +406,10 @@ impl Dispatch<WlWebosShellSurface, ()> for State {
     fn event(state: &mut Self, _: &WlWebosShellSurface, event: wl_webos_shell_surface::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         match event {
             wl_webos_shell_surface::Event::Close => state.closed = true,
+            wl_webos_shell_surface::Event::StateChanged { state: shown } => {
+                eprintln!("crunchy: window state {shown} (1 minimized, 2 maximized, 3 fullscreen)");
+                super::set_foreground(shown != 1);
+            }
             other => eprintln!("crunchy: shell event {other:?}"),
         }
     }

@@ -159,6 +159,7 @@ impl CrunchyApp {
         let dir = platform::data_dir();
         eprintln!("crunchy: data in {}", dir.display());
         let settings = Settings::load(&dir);
+        crunchy_player::set_debug(settings.debug_log || std::env::var("CRUNCHY_DEBUG").is_ok_and(|v| v != "0"));
         // before the first frame, which is drawn in it
         i18n::apply(&settings.ui_language);
         let (width, height) = settings.surface_size();
@@ -381,6 +382,7 @@ impl CrunchyApp {
             }
             Nav::SettingsChanged => {
                 self.state.settings.save();
+                crunchy_player::set_debug(self.state.settings.debug_log || std::env::var("CRUNCHY_DEBUG").is_ok_and(|v| v != "0"));
                 let (width, height) = self.state.settings.surface_size();
                 platform::set_surface_size(width, height);
                 if let Screen::Main(main) = &mut self.screen {

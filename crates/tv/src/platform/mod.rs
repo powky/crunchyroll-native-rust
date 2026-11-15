@@ -116,7 +116,21 @@ pub fn ui_locale() -> Option<String> {
     }
 }
 
-/// On the TV nothing reads stderr: send it to `crunchy.log` in the data folder (the previous run's kept as `.1`).
+static FOREGROUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Whether the window is in front (not minimized: the screensaver, LG's Home or another app over it). The TV only
+/// lends the video decoder to the app in front.
+pub fn foreground() -> bool {
+    FOREGROUND.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn set_foreground(front: bool) {
+    FOREGROUND.store(front, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// On the TV nothing reads stderr: send it to `crunchy.log` in the data folder (the two runs before kept as `.1`
+/// and `.2`).
 pub fn log_to_file(dir: &std::path::Path) {
     #[cfg(target_os = "linux")]
     {
@@ -125,6 +139,7 @@ pub fn log_to_file(dir: &std::path::Path) {
             fn dup2(old: i32, new: i32) -> i32;
         }
         let path = dir.join("crunchy.log");
+        let _ = std::fs::rename(dir.join("crunchy.log.1"), dir.join("crunchy.log.2"));
         let _ = std::fs::rename(&path, dir.join("crunchy.log.1"));
         if let Ok(file) = std::fs::File::create(&path) {
             unsafe {

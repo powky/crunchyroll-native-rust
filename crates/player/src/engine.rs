@@ -4,7 +4,7 @@
 
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -19,6 +19,37 @@ use crate::{State, Status, Subsample, es};
 /// Pipeline event types (webOS 5 on).
 const EVENT_ERROR: i32 = 18;
 const EVENT_END_OF_STREAM: i32 = 28;
+/// Pipelines loaded and not yet unloaded. The TV has one video decoder: a new pipeline waits (a while) for the last
+/// one to let it go, or its load fails with "Resource Allocation Error" (601).
+static LOADED: (Mutex<u32>, Condvar) = (Mutex::new(0), Condvar::new());
+/// How long a new pipeline waits for the last one to be unloaded.
+const UNLOAD_WAIT: Duration = Duration::from_secs(5);
+/// How far the picture may move on after a pause before it's taken for still playing.
+const PAUSE_SLIP: i64 = 1_500_000_000;
+
+/// Waits until no other pipeline is loaded (or `UNLOAD_WAIT` has passed), then counts this one in.
+fn take_decoder() {
+    let (count, unloaded) = &LOADED;
+    let started = Instant::now();
+    let mut loaded = count.lock().unwrap();
+    while *loaded > 0 && started.elapsed() < UNLOAD_WAIT {
+        loaded = unloaded.wait_timeout(loaded, UNLOAD_WAIT - started.elapsed()).unwrap().0;
+    }
+    if *loaded > 0 {
+        eprintln!("player: {} pipeline(s) still loaded after {UNLOAD_WAIT:?}; loading anyway", *loaded);
+    } else if started.elapsed() > Duration::from_millis(5) {
+        eprintln!("player: waited {:?} for the last pipeline to be unloaded", started.elapsed());
+    }
+    *loaded += 1;
+}
+
+fn give_decoder_back() {
+    let (count, unloaded) = &LOADED;
+    let mut loaded = count.lock().unwrap();
+    *loaded = loaded.saturating_sub(1);
+    unloaded.notify_all();
+}
+
 /// Segments prepared ahead of the one being fed.
 const AHEAD: usize = 2;
 /// Video fed before playing starts (unless the pipeline is full first).
@@ -90,14 +121,24 @@ impl Player {
         let duration = media.duration();
         let from = setup.from.min(duration.saturating_sub(Duration::from_secs(5)));
         let status = Arc::new(Mutex::new(Status { state: State::Loading, position: from, duration }));
-        let mut pipeline = Pipeline::new()?;
-        let events = pipeline.load(&load_payload(&media, &setup, from))?;
+        take_decoder();
+        let loading = Instant::now();
+        let loaded = Pipeline::new().and_then(|mut pipeline| Ok((pipeline.load(&load_payload(&media, &setup, from))?, pipeline)));
+        let (events, pipeline) = match loaded {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                give_decoder_back();
+                return Err(error);
+            }
+        };
+        crate::debug_log!("player: pipeline loaded in {:?}, from {from:?} of {duration:?}", loading.elapsed());
         let (control, controls) = channel();
         let fetcher = Fetcher { media, cdm: Arc::new(Mutex::new(cdm)), http: reqwest::Client::new(), runtime };
         let thread_status = status.clone();
         std::thread::Builder::new().name("player".into()).spawn(move || {
             let mut feeder = Feeder::new(pipeline, events, fetcher, thread_status);
             feeder.run(from, controls);
+            give_decoder_back();
         })?;
         Ok(Player { control, status })
     }
@@ -287,6 +328,10 @@ struct Feeder {
     position_logged: Instant,
     /// playing was asked for before the load completed
     play_pending: bool,
+    /// where the picture was when the user paused, and how often the pause was asked again since
+    paused_at: Option<i64>,
+    pause_retries: u8,
+    state_logged: Instant,
 }
 
 impl Feeder {
@@ -310,6 +355,9 @@ impl Feeder {
             polled_at: Instant::now(),
             position_logged: Instant::now(),
             play_pending: false,
+            paused_at: None,
+            pause_retries: 0,
+            state_logged: Instant::now(),
         }
     }
 
@@ -318,23 +366,32 @@ impl Feeder {
         self.fetch_from(from);
         loop {
             match controls.try_recv() {
-                Ok(Control::Stop) | Err(TryRecvError::Disconnected) => break,
+                Ok(Control::Stop) | Err(TryRecvError::Disconnected) => {
+                    crate::debug_log!("player: stop");
+                    break;
+                }
                 Ok(Control::Pause) => {
                     self.play_when_ready = false;
-                    if self.started {
-                        self.pipeline.pause();
-                    }
+                    let paused = self.started && self.pipeline.pause();
+                    self.paused_at = Some(self.pipeline.position());
+                    self.pause_retries = 0;
+                    crate::debug_log!("player: pause (started {}, pipeline {paused}) at {:?}", self.started, self.paused_at);
                     self.set_state(State::Paused);
                 }
                 Ok(Control::Resume) => {
+                    crate::debug_log!("player: resume (started {})", self.started);
                     self.play_when_ready = true;
+                    self.paused_at = None;
                     if self.started {
                         self.play_now();
                     } else {
                         self.set_state(State::Loading);
                     }
                 }
-                Ok(Control::Seek(to)) => self.seek(to),
+                Ok(Control::Seek(to)) => {
+                    crate::debug_log!("player: seek to {to:?}");
+                    self.seek(to);
+                }
                 Err(TryRecvError::Empty) => {}
             }
             if !self.pipeline_events() {
@@ -359,7 +416,9 @@ impl Feeder {
         if let Some(task) = self.task.take() {
             task.abort();
         }
+        let unloading = Instant::now();
         self.pipeline.unload();
+        crate::debug_log!("player: unloaded in {:?} (fed {:?})", unloading.elapsed(), self.fed);
     }
 
     fn fetch_from(&mut self, time: Duration) {
@@ -381,6 +440,9 @@ impl Feeder {
         self.started = false;
         self.first_video = None;
         self.position = -1;
+        if self.paused_at.is_some() {
+            self.paused_at = Some(to.as_nanos() as i64);
+        }
         self.pipeline.seek(to.as_millis() as u64);
         self.fetch_from(to);
         let mut status = self.status.lock().unwrap();
@@ -413,6 +475,35 @@ impl Feeder {
         }
         if self.started && position >= 0 {
             self.status.lock().unwrap().position = Duration::from_nanos(position as u64);
+        }
+        // paused, yet the picture moves on: the pause didn't take. Ask again, then believe the picture, so the
+        // controls don't stay up over a video that plays
+        if let Some(at) = self.paused_at
+            && position > at.max(0) + PAUSE_SLIP
+            && self.status.lock().unwrap().state == State::Paused
+        {
+            if self.pause_retries < 2 {
+                self.pause_retries += 1;
+                let paused = self.pipeline.pause();
+                eprintln!("player: still playing after a pause ({position} from {at}); asked again: {paused}");
+                self.paused_at = Some(position);
+            } else {
+                eprintln!("player: the pipeline won't pause, so it's playing");
+                self.paused_at = None;
+                self.play_when_ready = true;
+                self.set_state(State::Playing);
+            }
+        }
+        if crate::debug() && self.state_logged.elapsed() > Duration::from_secs(5) {
+            self.state_logged = Instant::now();
+            let state = self.status.lock().unwrap().state.clone();
+            crate::debug_log!(
+                "player: {state:?} at {position}, started {}, fed {:?}, queued {}/{}",
+                self.started,
+                self.fed,
+                self.video.len(),
+                self.audio.len()
+            );
         }
     }
 

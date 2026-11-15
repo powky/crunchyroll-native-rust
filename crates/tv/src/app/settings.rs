@@ -34,6 +34,8 @@ pub struct Settings {
     pub skip_for: u32,
     /// the player's controls drawn smaller
     pub small_controls: bool,
+    /// detailed log lines in crunchy.log (also `CRUNCHY_DEBUG=1`)
+    pub debug_log: bool,
     /// "continue watching" first on the home, else second
     pub continue_first: bool,
     /// the lite interface drops Mi Lista's poster and genres
@@ -58,6 +60,7 @@ impl Default for Settings {
             previews: true,
             skip_for: 10,
             small_controls: false,
+            debug_log: false,
             continue_first: false,
             lite: false,
             clock_24h: true,
@@ -109,6 +112,7 @@ enum Row {
     Previews,
     SkipFor,
     ControlsSize,
+    DebugLog,
     FirstRow,
     Interface,
     Clock,
@@ -129,6 +133,7 @@ impl Row {
             Row::Previews => t("Previews"),
             Row::SkipFor => t("Show “Skip intro”"),
             Row::ControlsSize => t("Controls size"),
+            Row::DebugLog => t("Detailed log"),
             Row::FirstRow => t("First row"),
             Row::Interface => t("Interface"),
             Row::Clock => t("Clock"),
@@ -149,6 +154,7 @@ impl Row {
             Row::Previews => Icon::Photo,
             Row::SkipFor => Icon::Skip,
             Row::ControlsSize => Icon::TextSize,
+            Row::DebugLog => Icon::Info,
             Row::FirstRow => Icon::Rows,
             Row::Interface => Icon::Sparkles,
             Row::Clock => Icon::Clock,
@@ -178,6 +184,7 @@ fn sections() -> Vec<(&'static str, Vec<Row>)> {
             vec![Tab::Simulcast, Tab::Series, Tab::Movies, Tab::Music, Tab::MyList].into_iter().map(Row::TabShown).collect(),
         ),
         (t("LANGUAGE"), vec![Row::UiLanguage, Row::ContentLanguage, Row::AudioLanguage, Row::SubtitleLanguage]),
+        (t("ADVANCED"), vec![Row::DebugLog]),
         (t("ACCOUNT"), vec![Row::SignOut]),
     ]
 }
@@ -201,6 +208,7 @@ fn options(row: Row, state: &State) -> Vec<(String, String)> {
         Row::FirstRow => pairs(&[("suggestions", t("Suggestions")), ("continue", t("Continue watching"))]),
         Row::Interface => pairs(&[("full", t("Full")), ("lite", t("Lite"))]),
         Row::ControlsSize => pairs(&[("normal", t("Normal")), ("small", t("Small"))]),
+        Row::DebugLog => pairs(&[("no", t("No")), ("yes", t("Yes"))]),
         Row::Clock => pairs(&[("24", t("24-hour")), ("12", t("12-hour (AM / PM)"))]),
         Row::Resolution => pairs(&[("1080p", t("1080p (recommended)")), ("1440p", "1440p"), ("2160p", "4K (2160p)")]),
         Row::TabShown(_) => pairs(&[("show", t("Show")), ("hide", t("Hide"))]),
@@ -237,6 +245,7 @@ fn value(row: Row, state: &State) -> Option<String> {
         Row::Previews => if s.previews { "yes" } else { "no" }.into(),
         Row::SkipFor => s.skip_for.to_string(),
         Row::ControlsSize => if s.small_controls { "small" } else { "normal" }.into(),
+        Row::DebugLog => if s.debug_log { "yes" } else { "no" }.into(),
         Row::FirstRow => if s.continue_first { "continue" } else { "suggestions" }.into(),
         Row::Interface => if s.lite { "lite" } else { "full" }.into(),
         Row::Clock => if s.clock_24h { "24" } else { "12" }.into(),
@@ -292,6 +301,7 @@ impl SettingsPage {
             Row::Previews => s.previews = chosen == "yes",
             Row::SkipFor => s.skip_for = chosen.parse().unwrap_or(10),
             Row::ControlsSize => s.small_controls = chosen == "small",
+            Row::DebugLog => s.debug_log = chosen == "yes",
             Row::FirstRow => s.continue_first = chosen == "continue",
             Row::Interface => s.lite = chosen == "lite",
             Row::Clock => s.clock_24h = chosen == "24",

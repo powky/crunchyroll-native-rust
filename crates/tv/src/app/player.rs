@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crunchy_core::content::SkipEvent;
-use crunchy_core::model::{BACKDROP_WIDTH, Card, Kind};
+use crunchy_core::model::{Card, Kind};
 use crunchy_player::State as PlayState;
 
 use crate::gfx::{Color, Font, Icon, Rect};
@@ -26,7 +26,7 @@ use super::i18n::{Text, t, tr};
 use super::languages;
 use super::theme::*;
 use super::worker::{Command, Event, Worker};
-use super::ui::{CARD_PICTURE, Ui};
+use super::ui::Ui;
 use super::{Env, Nav, Page, State};
 
 /// The controls hide this long after the last key (unless paused).
@@ -66,6 +66,10 @@ const SKIP_H: f32 = 84.0;
 const SMALL_CONTROLS: f32 = 0.8;
 /// How long the still takes to fade away once the video shows.
 const STILL_FADE: Duration = Duration::from_millis(600);
+/// A start that fails is tried again this many times, this long after (once the app is in front again: the TV
+/// takes the decoder from an app the screensaver covers).
+const RETRIES: u32 = 2;
+const RETRY_AFTER: Duration = Duration::from_millis(1500);
 
 /// The qualities the menu offers, as the setting stores them.
 const QUALITIES: [&str; 6] = ["adaptive", "1080p", "720p", "480p", "360p", "240p"];
@@ -150,6 +154,11 @@ pub struct PlayerPage {
     /// where the picture was when it stopped after playing (the TV took the decoder back while paused under the
     /// screensaver, the network went): OK opens it again there
     stopped_at: Option<Duration>,
+    /// tries of this start that failed, and when the next one goes
+    retries: u32,
+    retry_at: Option<Instant>,
+    /// the playback state logged last (detailed log)
+    state_logged: Option<PlayState>,
     /// since when the picture has been waiting for data (a seek, a slow network)
     loading_since: Option<Instant>,
     /// seek thumbnails: wanted (the setting), asked for (the stream's key), and when they came, their times
@@ -227,6 +236,9 @@ impl PlayerPage {
             playing_since: None,
             ever_played: false,
             stopped_at: None,
+            retries: 0,
+            retry_at: None,
+            state_logged: None,
             loading_since: None,
             previews: true,
             thumbs_asked: None,
@@ -324,6 +336,7 @@ impl PlayerPage {
             self.play_demo();
             return;
         }
+        crunchy_player::debug_log!("crunchy: asking for {id} from {:?} (try {})", self.wanted.from, self.retries + 1);
         self.requested = Some(id.clone());
         worker.send(Command::Play { id, wanted: self.wanted.clone() });
     }
@@ -372,6 +385,9 @@ impl PlayerPage {
         self.next = None;
         self.next_asked = false;
         self.controls = true;
+        self.retries = 0;
+        self.retry_at = None;
+        crunchy_player::debug_log!("crunchy: on to {} ({}), the last one left at {left_at:?}", self.card.id, self.card.title);
         if self.card.kind == Kind::Episode {
             self.send(worker, Command::EpisodeRating(self.card.id.clone()));
         }
@@ -392,6 +408,7 @@ impl PlayerPage {
         self.saved_at = Instant::now();
         if self.started && position > Duration::ZERO {
             let seconds = position.as_secs() as u32;
+            crunchy_player::debug_log!("crunchy: playhead {} at {seconds} s", self.card.id);
             self.send(worker, Command::SavePlayhead { id: self.card.id.clone(), seconds });
         }
     }
@@ -543,6 +560,20 @@ impl PlayerPage {
             out.push((*control, SCREEN_W - SIDE - button / 2.0 - from_end * step));
         }
         out
+    }
+
+    /// A start that failed (before the picture showed): tried again a moment later, a few times, before saying so.
+    fn failed_to_start(&mut self, message: Text) {
+        platform::want_video_window(false);
+        self.playback = None;
+        if self.retries < RETRIES {
+            self.retries += 1;
+            self.retry_at = Some(Instant::now() + RETRY_AFTER);
+            eprintln!("crunchy: couldn't start ({}); trying again ({}/{RETRIES})", message.get(), self.retries);
+        } else {
+            eprintln!("crunchy: couldn't start ({}); giving up", message.get());
+            self.failed = Some(message);
+        }
     }
 
     fn toggle(&mut self, playback: &Playback) {
@@ -717,21 +748,21 @@ impl PlayerPage {
         }
     }
 
-    /// Before the picture: the episode's still across the screen, drifting slowly closer, its name where the
-    /// controls' title will be and a spinner (or why it can't play). `k` fades it all, over the video once it starts.
+    /// The title without the episode's name, which can give the story away: "One Piece - E1164".
+    fn short_title(&self) -> String {
+        match &self.card.episode {
+            Some(episode) if !episode.number.is_empty() => format!("{} - {}", self.card.title, tr!("E{}", episode.number)),
+            _ => self.card.title.clone(),
+        }
+    }
+
+    /// Before the picture: black, the series and the episode's number where the controls' title will be (not the
+    /// episode's name: no spoilers before it plays) and a spinner, or why it can't play. `k` fades it all, over the
+    /// video once it starts.
     fn draw_loading(&self, ui: &mut Ui, failed: Option<&str>, k: f32) {
         let screen = Rect::new(0.0, 0.0, SCREEN_W, SCREEN_H);
         ui.gfx.rect(screen, 0.0, Color(0.0, 0.0, 0.0, k));
-        // the big still once it's here; the card's own, already loaded, until then
-        let big = self.card.backdrop.as_deref().and_then(|url| ui.images.get(ui.worker, url, BACKDROP_WIDTH));
-        let small = self.card.image.as_deref().and_then(|url| ui.images.get(ui.worker, url, CARD_PICTURE));
-        if let Some(texture) = big.or(small) {
-            let t = (self.opened_at.elapsed().as_secs_f32() / 12.0).min(1.0);
-            let zoom = 1.0 + 0.05 * (1.0 - (1.0 - t) * (1.0 - t));
-            ui.gfx.image(&texture, screen.scaled(zoom), 0.0, 0.62 * k);
-        }
-        fade_bottom(ui, FADE_TOP, 0.85, k);
-        ui.gfx.text(Font::SemiBold, 42.0, SIDE, TITLE_Y, &self.title(), TEXT.alpha(k), Some(SCREEN_W - 2.0 * SIDE));
+        ui.gfx.text(Font::SemiBold, 42.0, SIDE, TITLE_Y, &self.short_title(), TEXT.alpha(k), Some(SCREEN_W - 2.0 * SIDE));
         if let Some(message) = failed {
             match self.stopped_at {
                 Some(at) => {
@@ -742,7 +773,7 @@ impl PlayerPage {
                 None => {
                     ui.gfx.text(Font::SemiBold, 28.0, SIDE, BAR_Y - 10.0, t("Couldn’t play this"), TEXT, None);
                     ui.gfx.text(Font::Regular, 24.0, SIDE, BAR_Y + 34.0, message, MUTED, Some(SCREEN_W - 2.0 * SIDE));
-                    ui.gfx.text(Font::Regular, 22.0, SIDE, BAR_Y + 80.0, t("Back to return"), DIM, None);
+                    ui.gfx.text(Font::Regular, 22.0, SIDE, BAR_Y + 80.0, t("OK to try again · Back to return"), DIM, None);
                 }
             }
             return;
@@ -1024,10 +1055,7 @@ impl Page for PlayerPage {
                     self.send(env.worker, Command::SkipEvents(version));
                 }
             }
-            Event::PlaybackFailed(id, message) if self.requested.as_ref() == Some(id) => {
-                self.failed = Some(message.clone());
-                platform::want_video_window(false);
-            }
+            Event::PlaybackFailed(id, message) if self.requested.as_ref() == Some(id) => self.failed_to_start(message.clone()),
             Event::SkipEvents(id, events) if *id == self.skips_for => {
                 let parts: Vec<String> = events.iter().map(|e| format!("{} {:.0}-{:.0} s", e.kind, e.start, e.end)).collect();
                 eprintln!("crunchy: skip events: {}", parts.join(", "));
@@ -1077,6 +1105,13 @@ impl Page for PlayerPage {
             let id = self.playback.as_ref().map_or_else(|| self.card.id.clone(), |playback| playback.tracks.id.clone());
             self.stopped_at = None;
             self.wanted.from = at;
+            self.play(env.worker, id);
+            return Nav::Stay;
+        }
+        // couldn't start: OK tries again
+        if self.failed.is_some() && self.stopped_at.is_none() && key == Key::Ok {
+            self.retries = 0;
+            let id = self.requested.clone().unwrap_or_else(|| self.card.id.clone());
             self.play(env.worker, id);
             return Nav::Stay;
         }
@@ -1136,6 +1171,8 @@ impl Page for PlayerPage {
                     None => self.toggle(&playback),
                 },
                 Key::Up if self.skip_active.is_some() => self.set_focus(Focus::Skip),
+                // nothing above the bar to go to: Up puts the controls away
+                Key::Up => self.controls = false,
                 Key::Down => self.set_focus(Focus::Button(self.last_button)),
                 Key::Back => self.controls = false,
                 _ => {}
@@ -1158,6 +1195,14 @@ impl Page for PlayerPage {
     }
 
     fn draw(&mut self, ui: &mut Ui, _state: &State, _focused: bool) {
+        if let Some(at) = self.retry_at
+            && Instant::now() >= at
+            && platform::foreground()
+        {
+            self.retry_at = None;
+            let id = self.requested.clone().unwrap_or_else(|| self.card.id.clone());
+            self.play(ui.worker, id);
+        }
         if let Some(message) = self.failed.clone() {
             self.draw_loading(ui, Some(&message.get()), 1.0);
             return;
@@ -1174,20 +1219,28 @@ impl Page for PlayerPage {
             self.jump = None;
         }
         let status = playback.status();
+        if self.state_logged.as_ref() != Some(&status.state) {
+            crunchy_player::debug_log!("crunchy: playback {:?} at {:?} of {:?}", status.state, status.position, status.duration);
+            self.state_logged = Some(status.state.clone());
+        }
         match &status.state {
             PlayState::Failed(message) => {
                 eprintln!("crunchy: playback stopped: {message}");
-                if self.started {
-                    let at = self.jump.map_or(status.position, |jump| jump.to);
-                    self.stopped_at = Some(at);
-                    self.save(ui.worker, at);
+                if !self.started {
+                    self.failed_to_start(Text::Plain(message.clone()));
+                    self.draw_loading(ui, None, 1.0);
+                    return;
                 }
+                let at = self.jump.map_or(status.position, |jump| jump.to);
+                self.stopped_at = Some(at);
+                self.save(ui.worker, at);
                 self.failed = Some(Text::Plain(message.clone()));
                 platform::want_video_window(false);
                 return;
             }
             PlayState::Playing if !self.started => {
                 self.started = true;
+                self.retries = 0;
                 self.started_at = Some(Instant::now());
                 self.playing_since = Some(Instant::now());
                 self.ever_played = true;
