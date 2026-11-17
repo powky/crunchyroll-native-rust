@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.4 — 2026-11-16
+
+### Fixed
+
+- **The TV's decoders are given back when an episode ends.** The player stopped but stayed registered with the TV,
+  holding a video and an audio decoder, so after one or two episodes the next one couldn't start until the app was
+  restarted, and LG's screensaver came up over a playing episode. Now nothing is left once the player closes.
+- **Seeking with held arrows no longer runs away.** A press jumps 5 seconds; held, an arrow jumps at most 4 times a
+  second and further the longer it's held (10, 20, then 30 s; 60 and 90 on the bar with its thumbnails). Letting go
+  starts over at 5 s.
+
+### Changed
+
+- The player's controls always come up on play/pause.
+- OK with the controls hidden is play/pause.
+
 ## 1.0.3 — 2026-11-15
 
 ### Fixed
