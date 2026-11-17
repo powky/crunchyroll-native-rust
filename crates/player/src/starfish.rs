@@ -11,8 +11,8 @@ use anyhow::{Result, anyhow, bail};
 use crate::dl::Library;
 
 const LIBRARY: &str = "libplayerAPIs.so.1";
-/// The class's size isn't published: the object is built in a generously larger block, which is never freed (a late
-/// callback may still reach it).
+/// The class's size isn't published: the object is built in a generously larger block, which is destroyed (C++
+/// destructor) after unloading but never freed (a late callback may still reach it).
 const OBJECT_SIZE: usize = 64 * 1024;
 
 /// Event types seen from the pipeline. 0 comes ~5 times a second while playing, with the position in `number`.
@@ -160,6 +160,12 @@ impl Pipeline {
 impl Drop for Pipeline {
     fn drop(&mut self) {
         self.unload();
+        // Unload stops the pipeline but leaves it registered with the media server, holding the decoders, until the
+        // object is destroyed: every episode left one behind, and after two the TV had none left to give ("Resource
+        // Allocation Error", 601) until the app was restarted
+        if let Ok(api) = api() {
+            unsafe { (api.destruct)(self.object) };
+        }
     }
 }
 
@@ -193,6 +199,7 @@ struct Api {
     seek: unsafe extern "C" fn(*mut c_void, *const c_char) -> bool,
     set_volume: unsafe extern "C" fn(*mut c_void, *const c_char) -> bool,
     unload: unsafe extern "C" fn(*mut c_void) -> bool,
+    destruct: unsafe extern "C" fn(*mut c_void),
     notify_foreground: unsafe extern "C" fn(*mut c_void) -> bool,
     media_id: unsafe extern "C" fn(*mut c_void) -> *const c_char,
     current_playtime: unsafe extern "C" fn(*mut c_void) -> i64,
@@ -219,6 +226,7 @@ fn api() -> Result<&'static Api> {
                     seek: library.get("_ZN17StarfishMediaAPIs4SeekEPKc")?,
                     set_volume: library.get("_ZN17StarfishMediaAPIs9setVolumeEPKc")?,
                     unload: library.get("_ZN17StarfishMediaAPIs6UnloadEv")?,
+                    destruct: library.get("_ZN17StarfishMediaAPIsD1Ev")?,
                     notify_foreground: library.get("_ZN17StarfishMediaAPIs16notifyForegroundEv")?,
                     media_id: library.get("_ZN17StarfishMediaAPIs10getMediaIDEv")?,
                     current_playtime: library.get("_ZN17StarfishMediaAPIs18getCurrentPlaytimeEv")?,
