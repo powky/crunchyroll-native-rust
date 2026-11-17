@@ -1,9 +1,11 @@
 //! The player, laid out like the web app's (moonstone's video player in its Apple TV skin). The video fills the
 //! screen; a key brings up, over a fade at the bottom, the title and the times, a white progress bar and a row of
 //! round buttons: information, mark as watched and the thumbs on the left; the previous episode, play/pause and the
-//! next one in the middle; subtitles, audio and quality on the right, each with its menu above it. A button's name
-//! shows under it once the focus rests there. With the controls hidden, left and right jump (5, 10, 20, then 30
-//! seconds a press in a row); on the bar they move the knob; either way the video goes there once the arrows rest.
+//! next one in the middle; subtitles, audio and quality on the right, each with its menu above it. The controls
+//! always come up on play/pause; a button's name shows under it once the focus rests there. With the controls hidden,
+//! OK is play/pause and left and right jump (5 seconds a press; held, further the longer it's held, up to 30); on the
+//! bar they move the knob (up to 90 s a jump with the thumbnails in view); either way the video goes there once the
+//! arrows rest, or at once with OK on the bar.
 //! "Saltar intro" (and the recap, credits and preview) comes up on its own, focused, where Crunchyroll marked them,
 //! for the seconds Settings say, and after them shows with the controls until that part ends; over the credits and
 //! the preview it's "Siguiente episodio" when there's one, and "Terminar" after the last, through the whole of them.
@@ -33,9 +35,19 @@ use super::{Env, Nav, Page, State};
 const HIDE_AFTER: Duration = Duration::from_secs(5);
 /// A jump is made once the arrows rest this long.
 const JUMP_SETTLE: Duration = Duration::from_millis(700);
-/// Jumps in a row grow along this ladder (seconds); past 30 only on the bar with its thumbnails in view, where
-/// it's clear where the picture is going.
-const JUMP_LADDER: [u64; 6] = [5, 10, 20, 30, 60, 90];
+/// A held arrow jumps further the longer it's held: (held for at least, seconds a jump). Past 30 only on the bar
+/// with its thumbnails in view, where it's clear where the picture is going. Every new press starts at 5 again.
+const JUMP_LADDER: [(Duration, u64); 6] = [
+    (Duration::ZERO, 5),
+    (Duration::from_secs(2), 10),
+    (Duration::from_secs(4), 20),
+    (Duration::from_secs(6), 30),
+    (Duration::from_secs(8), 60),
+    (Duration::from_secs(11), 90),
+];
+/// A held arrow repeats ~10 times a second: it jumps at most this often (4 a second: 20 s of video a second at
+/// first, 120 at 30 s a jump).
+const JUMP_HELD_EVERY: Duration = Duration::from_millis(250);
 const JUMP_BLIND_MAX: u64 = 30;
 /// The seek thumbnails are asked for this long after the picture starts (its first segments get the network).
 const THUMBS_AFTER: Duration = Duration::from_secs(4);
@@ -181,8 +193,9 @@ pub struct PlayerPage {
     menu: Option<Menu>,
     info: bool,
     jump: Option<Jump>,
-    /// the last jump's direction, size and time, to double the next one
-    steps: Option<(bool, u64, Instant)>,
+    /// the jump direction held, since when, the key releases counted then (a release means a new press), and when
+    /// it last jumped
+    steps: Option<(bool, Instant, u32, Instant)>,
     /// the skip events of the version playing (its id)
     skips: Vec<SkipEvent>,
     skips_for: String,
@@ -487,9 +500,8 @@ impl PlayerPage {
             self.controls = true;
             // the focused button's name waits again, as if the focus had just arrived
             self.focus_at = Instant::now();
-            if let Focus::Button(_) = self.focus {
-                self.set_focus(Focus::Button(self.last_button));
-            }
+            // they always come up on play/pause
+            self.set_focus(Focus::Button(Control::PlayPause));
         }
     }
 
@@ -590,14 +602,21 @@ impl PlayerPage {
         let status = playback.status();
         let now = Instant::now();
         let seeing = self.focus == Focus::Bar && self.controls && self.thumbs.is_some();
-        let step = match self.steps {
-            Some((direction, step, at)) if direction == forward && now - at < Duration::from_secs(if step <= 10 { 2 } else { 5 }) => {
-                let next = JUMP_LADDER.iter().copied().find(|rung| *rung > step).unwrap_or(step);
-                if seeing { next } else { next.min(JUMP_BLIND_MAX) }
+        // the same arrow still held (no key let go since): further the longer it's held; a new press starts over
+        let releases = platform::releases();
+        let held_since = match self.steps {
+            Some((direction, since, seen, last)) if direction == forward && seen == releases => {
+                if now - last < JUMP_HELD_EVERY {
+                    return;
+                }
+                since
             }
-            _ => JUMP_LADDER[0],
+            _ => now,
         };
-        self.steps = Some((forward, step, now));
+        self.steps = Some((forward, held_since, releases, now));
+        let held = now - held_since;
+        let step = JUMP_LADDER.iter().rev().find(|(after, _)| held >= *after).map_or(5, |(_, step)| *step);
+        let step = if seeing { step } else { step.min(JUMP_BLIND_MAX) };
         let base = self.jump.map_or(status.position, |jump| jump.to);
         let step = Duration::from_secs(step);
         let to = if forward {
@@ -1158,6 +1177,8 @@ impl Page for PlayerPage {
                 Key::Left => self.jump(&playback, false),
                 Key::Right => self.jump(&playback, true),
                 Key::Back => return self.leave(env.worker),
+                // OK over the picture: play/pause, like the remote's own key
+                Key::Ok => self.toggle(&playback),
                 _ => self.show_controls(),
             }
             return Nav::Stay;
@@ -1356,7 +1377,7 @@ impl Page for PlayerPage {
             self.loading_since = None;
         }
         if !self.controls
-            && let Some((forward, _, _)) = self.steps.filter(|_| self.jump.is_some())
+            && let Some((forward, _, _, _)) = self.steps.filter(|_| self.jump.is_some())
         {
             self.draw_jump(ui, forward);
         }

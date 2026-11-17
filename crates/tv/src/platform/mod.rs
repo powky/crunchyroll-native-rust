@@ -116,6 +116,18 @@ pub fn ui_locale() -> Option<String> {
     }
 }
 
+static RELEASES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// How many keys have been let go since the start: a key held down repeats its press with none in between, so a
+/// count that moved means a new press, not a held one.
+pub fn releases() -> u32 {
+    RELEASES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn key_released() {
+    RELEASES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 static FOREGROUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 /// Whether the window is in front (not minimized: the screensaver, LG's Home or another app over it). The TV only

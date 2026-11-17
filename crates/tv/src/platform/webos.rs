@@ -453,6 +453,10 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
                 eprintln!("crunchy: key {key} -> {mapped:?}");
                 state.keys.push(mapped);
             }
+            wl_keyboard::Event::Key { key, state: WEnum::Value(wl_keyboard::KeyState::Released), .. } => {
+                crunchy_player::debug_log!("crunchy: key {key} let go");
+                super::key_released();
+            }
             wl_keyboard::Event::Enter { .. } => eprintln!("crunchy: keyboard focus in"),
             wl_keyboard::Event::Leave { .. } => eprintln!("crunchy: keyboard focus out"),
             _ => {}

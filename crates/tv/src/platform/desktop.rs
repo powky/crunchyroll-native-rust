@@ -157,6 +157,7 @@ impl<A: App> ApplicationHandler for Simulator<A> {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::RedrawRequested => self.redraw(event_loop),
+            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Released => super::key_released(),
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 let key = match event.logical_key {
                     WinitKey::Named(NamedKey::ArrowUp) => Key::Up,
